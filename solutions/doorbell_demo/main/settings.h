@@ -31,12 +31,12 @@ extern "C" {
 /**
  * @brief  Set for wifi ssid
  */
-#define WIFI_SSID     "XXXX"
+#define WIFI_SSID     "Dylan Lab6"
 
 /**
  * @brief  Set for wifi password
  */
-#define WIFI_PASSWORD "XXXX"
+#define WIFI_PASSWORD "Dylan1234"
 
 /**
  * @brief  Whether enable data channel
