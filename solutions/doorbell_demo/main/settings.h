@@ -19,9 +19,9 @@ extern "C" {
  * @brief  Video resolution settings
  */
 #if CONFIG_IDF_TARGET_ESP32P4
-#define VIDEO_WIDTH  1920
-#define VIDEO_HEIGHT 1080
-#define VIDEO_FPS    25
+#define VIDEO_WIDTH  1280
+#define VIDEO_HEIGHT 960
+#define VIDEO_FPS    15
 #else
 #define VIDEO_WIDTH  320
 #define VIDEO_HEIGHT 240
@@ -31,12 +31,12 @@ extern "C" {
 /**
  * @brief  Set for wifi ssid
  */
-#define WIFI_SSID     "Dylan Lab6"
+#define WIFI_SSID     "Dylan"
 
 /**
  * @brief  Set for wifi password
  */
-#define WIFI_PASSWORD "Dylan1234"
+#define WIFI_PASSWORD "1234"
 
 /**
  * @brief  Whether enable data channel
