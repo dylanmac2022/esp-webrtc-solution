@@ -197,6 +197,8 @@ int media_sys_buildup(void)
     esp_audio_dec_register_default();
     // Build capture system
     build_capture_system();
+    // Start the capture system to begin video/audio capture
+    esp_capture_start(capture_sys.capture_handle);
     // Build player system
     build_player_system();
     return 0;

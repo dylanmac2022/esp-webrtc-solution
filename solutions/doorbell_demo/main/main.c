@@ -10,6 +10,7 @@
 #include <esp_wifi.h>
 #include <esp_event.h>
 #include <esp_log.h>
+#include <esp_random.h>
 #include <esp_system.h>
 #include <nvs_flash.h>
 #include <sys/param.h>
@@ -276,10 +277,11 @@ static void capture_scheduler(const char *name, esp_capture_thread_schedule_cfg_
 
 static char* gen_room_id_use_mac(void)
 {
-    static char room_mac[16];
+    static char room_mac[24];
     uint8_t mac[6];
+    uint16_t nonce = (uint16_t)(esp_random() & 0xFFFF);
     network_get_mac(mac);
-    snprintf(room_mac, sizeof(room_mac)-1, "esp_%02x%02x%02x", mac[3], mac[4], mac[5]);
+    snprintf(room_mac, sizeof(room_mac), "esp_%02x%02x%02x_%04x", mac[3], mac[4], mac[5], nonce);
     return room_mac;
 }
 
@@ -288,11 +290,21 @@ static int network_event_handler(bool connected)
     if (connected) {
         // Enter into Room directly
         RUN_ASYNC(start, {
-            char *room = gen_room_id_use_mac();
-            snprintf(room_url, sizeof(room_url), "%s/join/%s", server_url, room);
-            ESP_LOGI(TAG, "Start to join in room %s", room);
-            if (start_webrtc(room_url) == 0) {
+            int ret = -1;
+            char *room = NULL;
+            for (int attempt = 0; attempt < 3; attempt++) {
+                room = gen_room_id_use_mac();
+                snprintf(room_url, sizeof(room_url), "%s/join/%s", server_url, room);
+                ESP_LOGI(TAG, "Start to join in room %s", room);
+                ret = start_webrtc(room_url);
+                if (ret == 0) {
+                    break;
+                }
+            }
+            if (ret == 0) {
                 ESP_LOGW(TAG, "Please use browser to join in %s on %s/doorbell", room, server_url);
+            } else {
+                ESP_LOGE(TAG, "Failed to start webrtc after retries, check network/signaling");
             }
         });
     } else {
