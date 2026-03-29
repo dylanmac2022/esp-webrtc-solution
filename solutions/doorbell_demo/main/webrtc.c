@@ -99,8 +99,10 @@ static int door_bell_on_cmd(esp_webrtc_custom_data_via_t via, uint8_t *data, int
             play_tone(DOOR_BELL_TONE_OPEN_DOOR);
         }
     } else if (SAME_STR(cmd, DOOR_BELL_CALL_ACCEPTED_CMD)) {
+        // Step 13: Browser accepted call; enable peer media transport.
         esp_webrtc_enable_peer_connection(webrtc, true);
     } else if (SAME_STR(cmd, DOOR_BELL_CALL_DENIED_CMD)) {
+        // Step 13b: Browser denied call; stop peer media transport.
         esp_webrtc_enable_peer_connection(webrtc, false);
         door_bell_change_state(DOOR_BELL_STATE_NONE);
     }
@@ -179,6 +181,7 @@ int start_webrtc(char *url)
     esp_peer_default_cfg_t peer_cfg = {
         .agent_recv_timeout = 500,
     };
+    // Step 10: Define what media this device offers to browser peer.
     esp_webrtc_cfg_t cfg = {
         .peer_cfg = {
             .audio_info = {
@@ -205,6 +208,7 @@ int start_webrtc(char *url)
             .extra_size = sizeof(peer_cfg),
         },
         .signaling_cfg = {
+            // Step 11: Point signaling to the selected room URL.
             .signal_url = url,
         },
         .peer_impl = esp_peer_get_default_impl(),
@@ -215,7 +219,7 @@ int start_webrtc(char *url)
         ESP_LOGE(TAG, "Fail to open webrtc");
         return ret;
     }
-    // Set media provider
+    // Step 12: Bind media sources/sinks (from media_sys) into WebRTC engine.
     esp_webrtc_media_provider_t media_provider = {};
     media_sys_get_provider(&media_provider);
     esp_webrtc_set_media_provider(webrtc, &media_provider);
@@ -223,10 +227,10 @@ int start_webrtc(char *url)
     // Set event handler
     esp_webrtc_set_event_handler(webrtc, webrtc_event_handler, NULL);
 
-    // Default disable auto connect of peer connection
+    // Keep peer transport disabled until ACCEPT_CALL command is received.
     esp_webrtc_enable_peer_connection(webrtc, false);
 
-    // Start webrtc
+    // Step 12b: Start signaling; SDP/ICE/DTLS will run after peer is enabled.
     ret = esp_webrtc_start(webrtc);
     if (ret != 0) {
         ESP_LOGE(TAG, "Fail to start webrtc");

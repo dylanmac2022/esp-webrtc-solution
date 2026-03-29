@@ -64,6 +64,7 @@ static esp_capture_video_src_if_t *create_video_source(void)
         return NULL;
     }
 #if CONFIG_IDF_TARGET_ESP32P4
+    // Step 1: Initialize the physical camera path (MIPI CSI for OV5647 on ESP32-P4).
     esp_video_init_csi_config_t csi_config = { 0 };
     esp_video_init_dvp_config_t dvp_config = { 0 };
     esp_video_init_config_t cam_config = { 0 };
@@ -98,6 +99,7 @@ static esp_capture_video_src_if_t *create_video_source(void)
         ESP_LOGE(TAG, "Camera init failed with error 0x%x", ret);
         return NULL;
     }
+    // Step 2: Expose camera frames as a V4L2 source consumed by the capture pipeline.
     esp_capture_video_v4l2_src_cfg_t v4l2_cfg = {
         .dev_name = "/dev/video0",
         .buf_count = 2,
@@ -132,16 +134,18 @@ static esp_capture_video_src_if_t *create_video_source(void)
 
 static int build_capture_system(void)
 {
+    // Step 3: Create the video source interface (camera frames enter here).
     capture_sys.vid_src = create_video_source();
     RET_ON_NULL(capture_sys.vid_src, -1);
 
+    // Step 4: Create the audio source interface (microphone samples enter here).
     esp_capture_audio_dev_src_cfg_t codec_cfg = {
         .record_handle = get_record_handle(),
     };
     capture_sys.aud_src = esp_capture_new_audio_dev_src(&codec_cfg);
     RET_ON_NULL(capture_sys.aud_src, -1);
 
-    // Create capture system
+    // Step 5: Merge audio+video sources into one synchronized capture handle.
     esp_capture_cfg_t cfg = {
         .sync_mode = ESP_CAPTURE_SYNC_MODE_AUDIO,
         .audio_src = capture_sys.aud_src,
@@ -190,22 +194,23 @@ static int build_player_system()
 
 int media_sys_buildup(void)
 {
-    // Register for default audio and video codecs
+    // Step 0: Register encoder/decoder implementations used by WebRTC negotiation.
     esp_video_enc_register_default();
     esp_audio_enc_register_default();
     esp_video_dec_register_default();
     esp_audio_dec_register_default();
-    // Build capture system
+    // Step 6: Build capture graph (camera/mic -> capture handle).
     build_capture_system();
-    // Start the capture system to begin video/audio capture
+    // Step 7: Start capture so frames are produced continuously for WebRTC.
     esp_capture_start(capture_sys.capture_handle);
-    // Build player system
+    // Step 8: Build local player path (mainly for audio, optional LCD video render).
     build_player_system();
     return 0;
 }
 
 int media_sys_get_provider(esp_webrtc_media_provider_t *provide)
 {
+    // Step 9: Expose capture/player handles to the WebRTC stack.
     provide->capture = capture_sys.capture_handle;
     provide->player = player_sys.player;
     return 0;

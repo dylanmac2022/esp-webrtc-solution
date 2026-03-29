@@ -288,7 +288,7 @@ static char* gen_room_id_use_mac(void)
 static int network_event_handler(bool connected)
 {
     if (connected) {
-        // Enter into Room directly
+        // Step A: After Wi-Fi is up, create room URL and start signaling/call pipeline.
         RUN_ASYNC(start, {
             int ret = -1;
             char *room = NULL;
@@ -315,6 +315,7 @@ static int network_event_handler(bool connected)
 
 void app_main(void)
 {
+    // Step A0: Initialize board, media pipeline, console, then Wi-Fi -> WebRTC flow starts.
     esp_log_level_set("*", ESP_LOG_INFO);
     media_lib_add_default_adapter();
     esp_capture_set_thread_scheduler(capture_scheduler);
