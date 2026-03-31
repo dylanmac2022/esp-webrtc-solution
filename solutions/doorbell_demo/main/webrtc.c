@@ -17,17 +17,24 @@
 
 #define TAG "DOOR_BELL"
 
-// Customized commands
-#define DOOR_BELL_OPEN_DOOR_CMD     "OPEN_DOOR"
-#define DOOR_BELL_DOOR_OPENED_CMD   "DOOR_OPENED"
-#define DOOR_BELL_RING_CMD          "RING"
-#define DOOR_BELL_CALL_ACCEPTED_CMD "ACCEPT_CALL"
-#define DOOR_BELL_CALL_DENIED_CMD   "DENY_CALL"
+// Custom command strings exchanged over the AppRTC signaling data channel.
+// These are plain-text commands sent peer-to-peer (not over RTP) to control
+// the doorbell call flow before and after media transport is established.
+#define DOOR_BELL_OPEN_DOOR_CMD     "OPEN_DOOR"    // Browser -> ESP32: user pressed "open door"
+#define DOOR_BELL_DOOR_OPENED_CMD   "DOOR_OPENED"  // ESP32 -> Browser: door opener acknowledged
+#define DOOR_BELL_RING_CMD          "RING"          // ESP32 -> Browser: doorbell button pressed
+#define DOOR_BELL_CALL_ACCEPTED_CMD "ACCEPT_CALL"  // Browser -> ESP32: user accepted video call
+#define DOOR_BELL_CALL_DENIED_CMD   "DENY_CALL"    // Browser -> ESP32: user rejected the call
 
 #define SAME_STR(a, b) (strncmp(a, b, sizeof(b) - 1) == 0)
 #define SEND_CMD(webrtc, cmd) \
     esp_webrtc_send_custom_data(webrtc, ESP_WEBRTC_CUSTOM_DATA_VIA_SIGNALING, (uint8_t *)cmd, strlen(cmd))
 
+// door_bell_state_t: Tracks the current call lifecycle state.
+// NONE       -> idle, waiting for a ring event
+// RINGING    -> RING command sent, ring tone playing, waiting for browser response
+// CONNECTING -> ACCEPT_CALL received, DTLS/ICE handshake in progress
+// CONNECTED  -> Full WebRTC peer connection established, media flowing
 typedef enum {
     DOOR_BELL_STATE_NONE,
     DOOR_BELL_STATE_RINGING,
@@ -79,6 +86,8 @@ int play_tone_int(int t)
 static void door_bell_change_state(door_bell_state_t state)
 {
     door_bell_state = state;
+    // Stop any playing ring/open-door tone whenever we transition to
+    // CONNECTING (call accepted, tone no longer needed) or NONE (call ended).
     if (state == DOOR_BELL_STATE_CONNECTING || state == DOOR_BELL_STATE_NONE) {
         stop_music();
     }
@@ -86,13 +95,15 @@ static void door_bell_change_state(door_bell_state_t state)
 
 static int door_bell_on_cmd(esp_webrtc_custom_data_via_t via, uint8_t *data, int size, void *ctx)
 {
+    // This callback fires whenever a text command arrives from the browser peer
+    // over the signaling data channel. Commands arrive as plain ASCII strings.
     if (size == 0 || webrtc == NULL) {
         return 0;
     }
     ESP_LOGI(TAG, "Receive command %.*s", size, (char *)data);
     const char *cmd = (const char *)data;
     if (SAME_STR(cmd, DOOR_BELL_OPEN_DOOR_CMD)) {
-        // Reply with door OPENED
+        // Browser pressed "Open Door" button; acknowledge and optionally play a tone.
         SEND_CMD(webrtc, DOOR_BELL_DOOR_OPENED_CMD);
         // Only play tome when connection not build up
         if (door_bell_state < DOOR_BELL_STATE_CONNECTING) {
@@ -100,9 +111,14 @@ static int door_bell_on_cmd(esp_webrtc_custom_data_via_t via, uint8_t *data, int
         }
     } else if (SAME_STR(cmd, DOOR_BELL_CALL_ACCEPTED_CMD)) {
         // Step 13: Browser accepted call; enable peer media transport.
+        // This unblocks the ICE/DTLS handshake that was deliberately held back
+        // (set to false in start_webrtc). Once enabled, the WebRTC engine completes
+        // the handshake and begins sending H.264 video + OPUS audio to the browser.
         esp_webrtc_enable_peer_connection(webrtc, true);
     } else if (SAME_STR(cmd, DOOR_BELL_CALL_DENIED_CMD)) {
         // Step 13b: Browser denied call; stop peer media transport.
+        // Disables the peer connection so no media is sent/received,
+        // then resets state to NONE so the doorbell is ready for the next ring.
         esp_webrtc_enable_peer_connection(webrtc, false);
         door_bell_change_state(DOOR_BELL_STATE_NONE);
     }
@@ -111,6 +127,10 @@ static int door_bell_on_cmd(esp_webrtc_custom_data_via_t via, uint8_t *data, int
 
 static int webrtc_event_handler(esp_webrtc_event_t *event, void *ctx)
 {
+    // Called by the WebRTC engine on connection lifecycle changes.
+    // CONNECTING  : ICE/DTLS handshake started (peer enabled via ACCEPT_CALL)
+    // CONNECTED   : DTLS done, SRTP keys exchanged, media flowing
+    // CONNECT_FAILED / DISCONNECTED : peer dropped; reset to idle
     if (event->type == ESP_WEBRTC_EVENT_CONNECTING) {
         door_bell_change_state(DOOR_BELL_STATE_CONNECTING);
     } else if (event->type == ESP_WEBRTC_EVENT_CONNECTED) {
@@ -123,36 +143,43 @@ static int webrtc_event_handler(esp_webrtc_event_t *event, void *ctx)
 
 void send_cmd(char *cmd)
 {
+    // send_cmd() is called by the serial console ("cmd ring") or by the GPIO
+    // key_monitor_thread when the physical doorbell button is pressed.
+    // It sends the RING command to the browser peer over the signaling channel
+    // and plays the ring tone locally on the speaker.
     if (SAME_STR(cmd, "ring")) {
-        SEND_CMD(webrtc, DOOR_BELL_RING_CMD);
+        SEND_CMD(webrtc, DOOR_BELL_RING_CMD); // Notify browser: doorbell was pressed
         ESP_LOGI(TAG, "Ring button on state %d", door_bell_state);
         if (door_bell_state < DOOR_BELL_STATE_CONNECTING) {
             door_bell_state = DOOR_BELL_STATE_RINGING;
-            play_tone(DOOR_BELL_TONE_RING);
+            play_tone(DOOR_BELL_TONE_RING); // Play 4-second AAC ring tone on local speaker
         }
     }
 }
 
 static void key_monitor_thread(void *arg)
 {
+    // Runs as a background FreeRTOS task to poll the physical doorbell button GPIO.
+    // When the button level changes from its initial idle state (rising or falling edge)
+    // it fires send_cmd("ring") - the same path as the serial console "cmd ring" command.
     gpio_config_t io_conf;
     memset(&io_conf, 0, sizeof(io_conf));
     io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pin_bit_mask = BIT64(DOOR_BELL_RING_BUTTON);
-    io_conf.pull_down_en = 1;
+    io_conf.pin_bit_mask = BIT64(DOOR_BELL_RING_BUTTON); // DOOR_BELL_RING_BUTTON defined in settings.h
+    io_conf.pull_down_en = 1; // Internal pull-down: button reads 0 at rest, 1 when pressed
     esp_err_t ret = 0;
     ret |= gpio_config(&io_conf);
 
-    media_lib_thread_sleep(50);
+    media_lib_thread_sleep(50); // Allow GPIO to settle after configuration
     int last_level = gpio_get_level(DOOR_BELL_RING_BUTTON);
-    int init_level = last_level;
+    int init_level = last_level; // Remember idle level to detect press direction
 
     while (monitor_key) {
-        media_lib_thread_sleep(50);
+        media_lib_thread_sleep(50); // Poll every 50 ms (20 Hz) - sufficient for debounce
         int level = gpio_get_level(DOOR_BELL_RING_BUTTON);
         if (level != last_level) {
             last_level = level;
-            if (level != init_level) {
+            if (level != init_level) { // Detect edge away from idle = button pressed
                 send_cmd("ring");
             }
         }
@@ -182,26 +209,32 @@ int start_webrtc(char *url)
         .agent_recv_timeout = 500,
     };
     // Step 10: Define what media this device offers to browser peer.
+    // The SDP offer sent during WebRTC negotiation is built from this config:
+    //   Audio : OPUS codec, 16 kHz, stereo, SEND+RECV (full duplex talk-back)
+    //   Video : H.264 codec, VIDEO_WIDTH x VIDEO_HEIGHT @ VIDEO_FPS, SEND-ONLY
+    //           (ESP32-P4 streams camera to browser; browser does not send video back)
+    // no_auto_reconnect=true means the ICE/DTLS handshake does NOT start automatically
+    // when the signaling room connects - it waits for ACCEPT_CALL to gate it (Step 13).
     esp_webrtc_cfg_t cfg = {
         .peer_cfg = {
             .audio_info = {
 #ifdef WEBRTC_SUPPORT_OPUS
-                .codec = ESP_PEER_AUDIO_CODEC_OPUS,
-                .sample_rate = 16000,
-                .channel = 2,
+                .codec = ESP_PEER_AUDIO_CODEC_OPUS, // OPUS: high-quality, low-latency VoIP codec
+                .sample_rate = 16000,               // 16 kHz narrowband - good for voice
+                .channel = 2,                       // Stereo (interleaved L+R)
 #else
-                .codec = ESP_PEER_AUDIO_CODEC_G711A,
+                .codec = ESP_PEER_AUDIO_CODEC_G711A, // Fallback: G.711 (lower quality, less CPU)
 #endif
             },
             .video_info = {
-                .codec = ESP_PEER_VIDEO_CODEC_H264,
-                .width = VIDEO_WIDTH,
-                .height = VIDEO_HEIGHT,
-                .fps = VIDEO_FPS,
+                .codec = ESP_PEER_VIDEO_CODEC_H264,  // H.264 hardware encoder on ESP32-P4
+                .width = VIDEO_WIDTH,                // Defined in settings.h (e.g. 1280)
+                .height = VIDEO_HEIGHT,              // Defined in settings.h (e.g. 720)
+                .fps = VIDEO_FPS,                    // Defined in settings.h (e.g. 15)
             },
-            .audio_dir = ESP_PEER_MEDIA_DIR_SEND_RECV,
-            .video_dir = ESP_PEER_MEDIA_DIR_SEND_ONLY,
-            .on_custom_data = door_bell_on_cmd,
+            .audio_dir = ESP_PEER_MEDIA_DIR_SEND_RECV, // Full duplex audio (door intercom)
+            .video_dir = ESP_PEER_MEDIA_DIR_SEND_ONLY, // One-way video: camera -> browser only
+            .on_custom_data = door_bell_on_cmd,         // Command handler for RING/ACCEPT/DENY
             .enable_data_channel = DATA_CHANNEL_ENABLED,
             .no_auto_reconnect = true, // No auto connect peer when signaling connected
             .extra_cfg = &peer_cfg,
@@ -209,10 +242,12 @@ int start_webrtc(char *url)
         },
         .signaling_cfg = {
             // Step 11: Point signaling to the selected room URL.
+            // Format: https://webrtc.espressif.com/join/esp_XXYYZZ_NNNN
+            // AppRTC uses this URL to match the ESP32 with a waiting browser peer.
             .signal_url = url,
         },
-        .peer_impl = esp_peer_get_default_impl(),
-        .signaling_impl = esp_signaling_get_apprtc_impl(),
+        .peer_impl = esp_peer_get_default_impl(),           // Default ICE/DTLS peer implementation
+        .signaling_impl = esp_signaling_get_apprtc_impl(),  // AppRTC-compatible signaling
     };
     int ret = esp_webrtc_open(&cfg, &webrtc);
     if (ret != 0) {
@@ -220,6 +255,9 @@ int start_webrtc(char *url)
         return ret;
     }
     // Step 12: Bind media sources/sinks (from media_sys) into WebRTC engine.
+    // media_sys_get_provider() fills in the capture handle (camera+mic -> browser)
+    // and the player handle (browser audio -> speaker). After this call the WebRTC
+    // engine knows where to pull encoded frames from and where to push decoded frames.
     esp_webrtc_media_provider_t media_provider = {};
     media_sys_get_provider(&media_provider);
     esp_webrtc_set_media_provider(webrtc, &media_provider);
@@ -228,9 +266,14 @@ int start_webrtc(char *url)
     esp_webrtc_set_event_handler(webrtc, webrtc_event_handler, NULL);
 
     // Keep peer transport disabled until ACCEPT_CALL command is received.
+    // This prevents ICE candidates and DTLS from being exchanged with the browser
+    // until the user explicitly presses Accept on the browser UI.
     esp_webrtc_enable_peer_connection(webrtc, false);
 
     // Step 12b: Start signaling; SDP/ICE/DTLS will run after peer is enabled.
+    // esp_webrtc_start() connects to the AppRTC room and waits for a browser peer.
+    // Media does NOT flow yet - the peer connection is gated (false above).
+    // Flow begins only when ACCEPT_CALL triggers enable_peer_connection(true) in Step 13.
     ret = esp_webrtc_start(webrtc);
     if (ret != 0) {
         ESP_LOGE(TAG, "Fail to start webrtc");

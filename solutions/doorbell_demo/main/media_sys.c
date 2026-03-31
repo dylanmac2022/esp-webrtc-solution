@@ -35,16 +35,20 @@
     }                                                           \
 } while (0)
 
+// capture_system_t: Bundles the camera (vid_src) and microphone (aud_src) source
+// interfaces together with the unified capture handle that synchronizes them.
 typedef struct {
-    esp_capture_sink_handle_t   capture_handle;
-    esp_capture_video_src_if_t *vid_src;
-    esp_capture_audio_src_if_t *aud_src;
+    esp_capture_sink_handle_t   capture_handle; // Synchronized audio+video capture handle
+    esp_capture_video_src_if_t *vid_src;        // Camera source (OV5647 via V4L2 /dev/video0)
+    esp_capture_audio_src_if_t *aud_src;        // Mic source (I2S via ES8311 codec)
 } capture_system_t;
 
+// player_system_t: Bundles the audio (I2S speaker) and optional video (LCD) render
+// paths with the av_render handle that dispatches incoming decoded media to them.
 typedef struct {
-    audio_render_handle_t audio_render;
-    video_render_handle_t video_render;
-    av_render_handle_t    player;
+    audio_render_handle_t audio_render; // I2S speaker output for received audio
+    video_render_handle_t video_render; // LCD display output (optional, may be NULL)
+    av_render_handle_t    player;       // Unified player that feeds audio_render/video_render
 } player_system_t;
 
 static capture_system_t capture_sys;
@@ -65,14 +69,18 @@ static esp_capture_video_src_if_t *create_video_source(void)
     }
 #if CONFIG_IDF_TARGET_ESP32P4
     // Step 1: Initialize the physical camera path (MIPI CSI for OV5647 on ESP32-P4).
+    // MIPI CSI (Camera Serial Interface) is a high-speed 2-lane serial bus carrying raw
+    // Bayer/YUV frames from the OV5647 sensor directly into the ESP32-P4 ISP hardware.
+    // The sensor is configured over SCCB (I2C-compatible) at 100 kHz to set resolution,
+    // frame rate, exposure, and gain before streaming begins.
     esp_video_init_csi_config_t csi_config = { 0 };
     esp_video_init_dvp_config_t dvp_config = { 0 };
     esp_video_init_config_t cam_config = { 0 };
     if (cam_pin_cfg.type == CAMERA_TYPE_MIPI) {
-        csi_config.sccb_config.i2c_handle = get_i2c_bus_handle(0);
-        csi_config.sccb_config.freq = 100000;
-        csi_config.reset_pin = cam_pin_cfg.reset;
-        csi_config.pwdn_pin = cam_pin_cfg.pwr;
+        csi_config.sccb_config.i2c_handle = get_i2c_bus_handle(0); // Shared I2C bus for sensor control
+        csi_config.sccb_config.freq = 100000; // 100 kHz SCCB clock for OV5647 register writes
+        csi_config.reset_pin = cam_pin_cfg.reset; // Hardware reset line to sensor
+        csi_config.pwdn_pin = cam_pin_cfg.pwr;    // Power-down pin (active low on OV5647)
         ESP_LOGI(TAG, "Use i2c handle %p", csi_config.sccb_config.i2c_handle);
         cam_config.csi = &csi_config;
     } else if (cam_pin_cfg.type == CAMERA_TYPE_DVP) {
@@ -100,9 +108,13 @@ static esp_capture_video_src_if_t *create_video_source(void)
         return NULL;
     }
     // Step 2: Expose camera frames as a V4L2 source consumed by the capture pipeline.
+    // The ESP-IDF video driver registers the OV5647 as a standard Linux-style V4L2
+    // device at /dev/video0. Using 2 DMA buffers allows one frame to be filled by the
+    // CSI DMA engine while the previous frame is being read by the capture pipeline,
+    // preventing stalls (double-buffering).
     esp_capture_video_v4l2_src_cfg_t v4l2_cfg = {
-        .dev_name = "/dev/video0",
-        .buf_count = 2,
+        .dev_name = "/dev/video0", // Camera exposed as V4L2 device
+        .buf_count = 2,            // Double-buffered DMA to prevent frame drops
     };
     return esp_capture_new_video_v4l2_src(&v4l2_cfg);
 #endif
@@ -135,19 +147,26 @@ static esp_capture_video_src_if_t *create_video_source(void)
 static int build_capture_system(void)
 {
     // Step 3: Create the video source interface (camera frames enter here).
+    // create_video_source() initializes the OV5647 over MIPI CSI and returns a handle
+    // that the capture pipeline uses to pull raw video frames on demand.
     capture_sys.vid_src = create_video_source();
     RET_ON_NULL(capture_sys.vid_src, -1);
 
     // Step 4: Create the audio source interface (microphone samples enter here).
+    // The ES8311 codec records PCM audio via I2S. get_record_handle() returns the
+    // already-opened I2S RX channel handle configured for 16-bit stereo at 16 kHz.
     esp_capture_audio_dev_src_cfg_t codec_cfg = {
-        .record_handle = get_record_handle(),
+        .record_handle = get_record_handle(), // I2S RX handle from board driver
     };
     capture_sys.aud_src = esp_capture_new_audio_dev_src(&codec_cfg);
     RET_ON_NULL(capture_sys.aud_src, -1);
 
     // Step 5: Merge audio+video sources into one synchronized capture handle.
+    // ESP_CAPTURE_SYNC_MODE_AUDIO means the audio clock drives synchronization:
+    // video frames are timestamped relative to the audio sample clock so that
+    // the WebRTC stack can pair them correctly in the RTP packetizer.
     esp_capture_cfg_t cfg = {
-        .sync_mode = ESP_CAPTURE_SYNC_MODE_AUDIO,
+        .sync_mode = ESP_CAPTURE_SYNC_MODE_AUDIO, // Audio clock is the sync reference
         .audio_src = capture_sys.aud_src,
         .video_src = capture_sys.vid_src,
     };
@@ -157,32 +176,48 @@ static int build_capture_system(void)
 
 static int build_player_system()
 {
+    // Build the local playback path: decoded audio from the browser plays through
+    // the I2S speaker, and (optionally) decoded video plays on the LCD display.
+
+    // Step 8a: Configure I2S audio render (speaker output for received audio).
+    // fixed_clock=true locks the I2S bit clock to avoid drift when no data arrives.
+    // get_playback_handle() returns the I2S TX channel opened by the board driver.
     i2s_render_cfg_t i2s_cfg = {
-        .fixed_clock = true,
-        .play_handle = get_playback_handle(),
+        .fixed_clock = true,           // Prevent I2S clock drift during silence
+        .play_handle = get_playback_handle(), // I2S TX handle from board driver
     };
     player_sys.audio_render = av_render_alloc_i2s_render(&i2s_cfg);
     if (player_sys.audio_render == NULL) {
         ESP_LOGE(TAG, "Fail to create audio render");
         return -1;
     }
+
+    // Step 8b: Configure LCD video render (optional - may be NULL on this board).
+    // board_get_lcd_handle() returns NULL if no LCD is wired; the av_render layer
+    // gracefully skips video display in that case (remote video still streams to browser).
     lcd_render_cfg_t lcd_cfg = {
-        .lcd_handle = board_get_lcd_handle(),
+        .lcd_handle = board_get_lcd_handle(), // NULL if no LCD attached
     };
     player_sys.video_render = av_render_alloc_lcd_render(&lcd_cfg);
 
     if (player_sys.video_render == NULL) {
         ESP_LOGE(TAG, "Fail to create video render");
-        // Allow not display
+        // Allow not display - LCD is optional, WebRTC still sends video to browser
     }
+
+    // Step 8c: Open the unified av_render player with both render paths.
+    // FIFO sizes are tuned for the expected codec bitrates:
+    //   audio_raw_fifo  : 4 KB  - holds ~250 ms of decoded OPUS PCM at 16 kHz stereo
+    //   audio_render    : 6 KB  - I2S DMA staging buffer
+    //   video_raw_fifo  : 500 KB - holds several H.264 frames before LCD decode
+    // allow_drop_data=false ensures no audio glitches during brief network jitter.
     av_render_cfg_t render_cfg = {
         .audio_render = player_sys.audio_render,
         .video_render = player_sys.video_render,
-        .audio_raw_fifo_size = 4096,
-        .audio_render_fifo_size = 6 * 1024,
-        .video_raw_fifo_size = 500 * 1024,
-        .allow_drop_data = false,
-        //.video_render_fifo_size = 4*1024,
+        .audio_raw_fifo_size = 4096,         // Decoded audio FIFO (PCM samples)
+        .audio_render_fifo_size = 6 * 1024,  // I2S DMA staging buffer
+        .video_raw_fifo_size = 500 * 1024,   // Decoded video FIFO (H.264 frames)
+        .allow_drop_data = false,            // Never drop audio to prevent glitches
     };
     player_sys.player = av_render_open(&render_cfg);
     if (player_sys.player == NULL) {
@@ -195,15 +230,27 @@ static int build_player_system()
 int media_sys_buildup(void)
 {
     // Step 0: Register encoder/decoder implementations used by WebRTC negotiation.
-    esp_video_enc_register_default();
-    esp_audio_enc_register_default();
-    esp_video_dec_register_default();
-    esp_audio_dec_register_default();
+    // These calls register the hardware-accelerated H.264 video encoder/decoder and
+    // the OPUS audio encoder/decoder into global codec registries. The WebRTC engine
+    // queries these registries during SDP negotiation to confirm codec support.
+    esp_video_enc_register_default(); // H.264 hardware encoder (ESP32-P4 video codec)
+    esp_audio_enc_register_default(); // OPUS encoder (software, runs on core 1)
+    esp_video_dec_register_default(); // H.264 hardware decoder
+    esp_audio_dec_register_default(); // OPUS decoder (software)
+
     // Step 6: Build capture graph (camera/mic -> capture handle).
+    // Allocates the source interfaces and opens the synchronized capture pipeline.
     build_capture_system();
+
     // Step 7: Start capture so frames are produced continuously for WebRTC.
+    // After this call the camera sensor begins streaming frames via MIPI CSI DMA
+    // and the I2S mic begins producing PCM samples. Both are buffered internally
+    // so the WebRTC engine can pull them whenever a peer connection is active.
     esp_capture_start(capture_sys.capture_handle);
+
     // Step 8: Build local player path (mainly for audio, optional LCD video render).
+    // Sets up I2S speaker output for received OPUS audio. Also attempts to set up
+    // an LCD video render for received H.264 video (optional - skipped if no LCD).
     build_player_system();
     return 0;
 }
@@ -211,8 +258,12 @@ int media_sys_buildup(void)
 int media_sys_get_provider(esp_webrtc_media_provider_t *provide)
 {
     // Step 9: Expose capture/player handles to the WebRTC stack.
-    provide->capture = capture_sys.capture_handle;
-    provide->player = player_sys.player;
+    // This is the handoff point between media_sys.c and webrtc.c.
+    // The WebRTC engine uses 'capture' to pull encoded H.264/OPUS frames
+    // for sending to the browser, and 'player' to push decoded frames
+    // received from the browser to the local speaker/LCD.
+    provide->capture = capture_sys.capture_handle; // Source: camera + mic -> browser
+    provide->player  = player_sys.player;          // Sink:   browser audio -> speaker
     return 0;
 }
 
