@@ -73,6 +73,20 @@ Then, use a Chrome/Edge browser to enter the same room at [DoorBellDemo](https:/
 
 All other steps follow the typical call flow of `esp_webrtc`. For more details on the standard connection build flow, refer to the [Connection Build Flow](../../components/esp_webrtc/README.md#typical-call-sequence-of-esp_webrtc).
 
+## Lab 7 Cloud Extension
+
+This workspace now includes Lab 7 implementation assets:
+
+1. Firmware cloud hooks (metadata + MQTT command subscribe):
+   - `main/cloud_client.c`
+   - `main/cloud_client.h`
+2. AWS backend (Lambda + API + S3 + DynamoDB + LiveKit token):
+   - `cloud/`
+3. Browser dashboard (live view + controls + history + playback):
+   - `dashboard/`
+4. Implementation details and deployment steps:
+   - `LAB7_IMPLEMENTATION.md`
+
 ### QA
 - If the board unexpectedly leaves the room, fail to re-enter same room.
   Server will keep the room for 1-2 minutes before timing out. The user must wait for the timeout to expire before retrying.

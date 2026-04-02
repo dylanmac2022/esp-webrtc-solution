@@ -1,0 +1,229 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Doorbell Lab 7 cloud backend
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Timeout: 10
+    MemorySize: 256
+    Environment:
+      Variables:
+        EVENTS_TABLE: !Ref EventsTable
+        MEDIA_BUCKET: !Ref MediaBucket
+
+Parameters:
+  CorsAllowOrigin:
+    Type: String
+    Default: "*"
+  DeviceApiKey:
+    Type: String
+    NoEcho: true
+  LivekitWsUrl:
+    Type: String
+  LivekitApiKey:
+    Type: String
+  LivekitApiSecret:
+    Type: String
+    NoEcho: true
+  IotDataEndpoint:
+    Type: String
+  IotTopicPrefix:
+    Type: String
+    Default: doorbell
+
+Resources:
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  EventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      TableName: doorbell_events
+      AttributeDefinitions:
+        - AttributeName: deviceId
+          AttributeType: S
+        - AttributeName: eventTs
+          AttributeType: N
+      KeySchema:
+        - AttributeName: deviceId
+          KeyType: HASH
+        - AttributeName: eventTs
+          KeyType: RANGE
+
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref CorsAllowOrigin
+        AllowHeaders:
+          - authorization
+          - content-type
+          - x-api-key
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+
+  CommonFunctionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: doorbell-lab7-common-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:PutItem
+              - dynamodb:Query
+            Resource: !GetAtt EventsTable.Arn
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+            Resource: !Sub '${MediaBucket.Arn}/*'
+
+  LivekitTokenFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: handlers/livekitToken.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Environment:
+        Variables:
+          CORS_ALLOW_ORIGIN: !Ref CorsAllowOrigin
+          DEVICE_API_KEY: !Ref DeviceApiKey
+          LIVEKIT_WS_URL: !Ref LivekitWsUrl
+          LIVEKIT_API_KEY: !Ref LivekitApiKey
+          LIVEKIT_API_SECRET: !Ref LivekitApiSecret
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /token/livekit
+            Method: POST
+
+  MediaUploadUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: handlers/mediaUploadUrl.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - !Ref CommonFunctionPolicy
+      Environment:
+        Variables:
+          CORS_ALLOW_ORIGIN: !Ref CorsAllowOrigin
+          DEVICE_API_KEY: !Ref DeviceApiKey
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /media/upload-url
+            Method: POST
+
+  CreateEventFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: handlers/createEvent.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - !Ref CommonFunctionPolicy
+      Environment:
+        Variables:
+          CORS_ALLOW_ORIGIN: !Ref CorsAllowOrigin
+          DEVICE_API_KEY: !Ref DeviceApiKey
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /events
+            Method: POST
+
+  ListEventsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: handlers/listEvents.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - !Ref CommonFunctionPolicy
+      Environment:
+        Variables:
+          CORS_ALLOW_ORIGIN: !Ref CorsAllowOrigin
+          DEVICE_API_KEY: !Ref DeviceApiKey
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /events
+            Method: GET
+
+  GetPlaybackFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: handlers/getPlayback.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - !Ref CommonFunctionPolicy
+      Environment:
+        Variables:
+          CORS_ALLOW_ORIGIN: !Ref CorsAllowOrigin
+          DEVICE_API_KEY: !Ref DeviceApiKey
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /events/{eventId}/playback
+            Method: GET
+
+  PublishCommandFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: handlers/publishCommand.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - iot:Publish
+              Resource: '*'
+      Environment:
+        Variables:
+          CORS_ALLOW_ORIGIN: !Ref CorsAllowOrigin
+          DEVICE_API_KEY: !Ref DeviceApiKey
+          IOT_DATA_ENDPOINT: !Ref IotDataEndpoint
+          IOT_TOPIC_PREFIX: !Ref IotTopicPrefix
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /device/command
+            Method: POST
+
+Outputs:
+  ApiBaseUrl:
+    Value: !Sub 'https://${Api}.execute-api.${AWS::Region}.amazonaws.com'
+  BucketName:
+    Value: !Ref MediaBucket
+  EventsTableName:
+    Value: !Ref EventsTable

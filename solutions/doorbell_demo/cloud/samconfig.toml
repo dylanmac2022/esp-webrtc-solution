@@ -1,0 +1,13 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "doorbell-lab7"
+resolve_s3 = true
+s3_prefix = "doorbell-lab7"
+region = "us-east-2"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "CorsAllowOrigin=\"*\" LivekitWsUrl=\"wss://lab7cloudservice-f6kwjbnt.livekit.cloud\" LivekitApiKey=\"APIp8awWURu2riw\" IotDataEndpoint=\"temp.iot.us-east-2.amazonaws.com\" IotTopicPrefix=\"doorbell\""
+image_repositories = []
+
+[default.global.parameters]
+region = "us-east-2"

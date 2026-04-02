@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Bird Feeder Cloud Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f7f4ea;
+      --ink: #1f241f;
+      --panel: #fffaf0;
+      --line: #d5ccb8;
+      --accent: #0f766e;
+      --accent2: #d97706;
+      --danger: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Space Grotesk", sans-serif;
+      color: var(--ink);
+      background: radial-gradient(1200px 600px at 10% 0%, #efe8d6 0, var(--bg) 60%),
+                  radial-gradient(800px 500px at 90% 100%, #e8f4f2 0, transparent 65%),
+                  var(--bg);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    h1 { margin: 0 0 8px; font-size: clamp(1.8rem, 3vw, 2.6rem); }
+    .sub { margin: 0 0 20px; color: #4b5563; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 16px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.06);
+    }
+    .card h2 { margin: 0 0 12px; font-size: 1.15rem; }
+    label { display: block; margin-bottom: 6px; font-size: 0.9rem; color: #374151; }
+    input, select, button {
+      font-family: inherit;
+      font-size: 0.95rem;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      width: 100%;
+      margin-bottom: 10px;
+      background: #fff;
+    }
+    button {
+      cursor: pointer;
+      border: 0;
+      background: linear-gradient(135deg, var(--accent), #0b8f84);
+      color: white;
+      font-weight: 700;
+      transform: translateY(0);
+      transition: transform 0.18s ease, filter 0.18s ease;
+    }
+    button:hover { transform: translateY(-1px); filter: brightness(1.03); }
+    button.secondary { background: linear-gradient(135deg, var(--accent2), #f59e0b); }
+    button.danger { background: linear-gradient(135deg, var(--danger), #dc2626); }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    #liveView {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      border-radius: 12px;
+      border: 1px dashed var(--line);
+      background: #101827;
+      display: grid;
+      place-items: center;
+      color: #d1d5db;
+      overflow: hidden;
+    }
+    #liveView video { width: 100%; height: 100%; object-fit: cover; }
+    #history {
+      max-height: 360px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px;
+      background: #fff;
+    }
+    .event {
+      padding: 10px;
+      border-bottom: 1px solid #ece7da;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.84rem;
+    }
+    .event:last-child { border-bottom: 0; }
+    #log {
+      white-space: pre-wrap;
+      background: #101827;
+      color: #a5f3fc;
+      border-radius: 10px;
+      padding: 10px;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.78rem;
+      max-height: 200px;
+      overflow: auto;
+    }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Smart Bird Feeder Cloud Console</h1>
+    <p class="sub">Live view with LiveKit, cloud event timeline from AWS, MQTT command controls, and playback links.</p>
+
+    <div class="grid">
+      <section class="card">
+        <h2>Connection</h2>
+        <label>API Base URL</label>
+        <input id="apiBase" placeholder="https://xxxx.execute-api.region.amazonaws.com" />
+
+        <div class="row">
+          <div>
+            <label>Device ID</label>
+            <input id="deviceId" placeholder="esp-a1b2c3" />
+          </div>
+          <div>
+            <label>Room Name</label>
+            <input id="roomName" placeholder="doorbell-esp-a1b2c3" />
+          </div>
+        </div>
+
+        <label>API Key</label>
+        <input id="apiKey" placeholder="x-api-key" />
+
+        <button id="btnLive">Connect Live View</button>
+        <button class="secondary" id="btnEvents">Refresh Event History</button>
+      </section>
+
+      <section class="card">
+        <h2>Live Video</h2>
+        <div id="liveView">Remote video appears here</div>
+      </section>
+
+      <section class="card">
+        <h2>Device Controls (MQTT)</h2>
+        <div class="row">
+          <button id="btnRecordStart">Start Recording</button>
+          <button class="danger" id="btnRecordStop">Stop Recording</button>
+        </div>
+        <div class="row">
+          <button class="secondary" id="btnPhoto">Capture Photo</button>
+          <button id="btnDoor">Open Door</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Event History + Playback</h2>
+        <div id="history"></div>
+      </section>
+
+      <section class="card" style="grid-column: 1 / -1;">
+        <h2>Logs</h2>
+        <div id="log"></div>
+      </section>
+    </div>
+  </div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

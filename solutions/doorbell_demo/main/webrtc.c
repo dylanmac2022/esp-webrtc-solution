@@ -8,12 +8,14 @@
 */
 
 #include "esp_webrtc.h"
+#include <string.h>
 #include "media_lib_os.h"
 #include "driver/gpio.h"
 #include "common.h"
 #include "esp_log.h"
 #include "esp_webrtc_defaults.h"
 #include "esp_peer_default.h"
+#include "cloud_client.h"
 
 #define TAG "DOOR_BELL"
 
@@ -57,6 +59,7 @@ typedef struct {
 static esp_webrtc_handle_t webrtc;
 static door_bell_state_t   door_bell_state;
 static bool                monitor_key;
+static char                active_room_name[64];
 
 extern const uint8_t ring_music_start[] asm("_binary_ring_aac_start");
 extern const uint8_t ring_music_end[] asm("_binary_ring_aac_end");
@@ -93,6 +96,11 @@ static void door_bell_change_state(door_bell_state_t state)
     }
 }
 
+static void post_cloud_event(const char *event_type)
+{
+    cloud_client_post_event(event_type, active_room_name);
+}
+
 static int door_bell_on_cmd(esp_webrtc_custom_data_via_t via, uint8_t *data, int size, void *ctx)
 {
     // This callback fires whenever a text command arrives from the browser peer
@@ -105,6 +113,7 @@ static int door_bell_on_cmd(esp_webrtc_custom_data_via_t via, uint8_t *data, int
     if (SAME_STR(cmd, DOOR_BELL_OPEN_DOOR_CMD)) {
         // Browser pressed "Open Door" button; acknowledge and optionally play a tone.
         SEND_CMD(webrtc, DOOR_BELL_DOOR_OPENED_CMD);
+        post_cloud_event("open_door");
         // Only play tome when connection not build up
         if (door_bell_state < DOOR_BELL_STATE_CONNECTING) {
             play_tone(DOOR_BELL_TONE_OPEN_DOOR);
@@ -115,12 +124,14 @@ static int door_bell_on_cmd(esp_webrtc_custom_data_via_t via, uint8_t *data, int
         // (set to false in start_webrtc). Once enabled, the WebRTC engine completes
         // the handshake and begins sending H.264 video + OPUS audio to the browser.
         esp_webrtc_enable_peer_connection(webrtc, true);
+        post_cloud_event("call_accepted");
     } else if (SAME_STR(cmd, DOOR_BELL_CALL_DENIED_CMD)) {
         // Step 13b: Browser denied call; stop peer media transport.
         // Disables the peer connection so no media is sent/received,
         // then resets state to NONE so the doorbell is ready for the next ring.
         esp_webrtc_enable_peer_connection(webrtc, false);
         door_bell_change_state(DOOR_BELL_STATE_NONE);
+        post_cloud_event("call_denied");
     }
     return 0;
 }
@@ -135,8 +146,10 @@ static int webrtc_event_handler(esp_webrtc_event_t *event, void *ctx)
         door_bell_change_state(DOOR_BELL_STATE_CONNECTING);
     } else if (event->type == ESP_WEBRTC_EVENT_CONNECTED) {
         door_bell_change_state(DOOR_BELL_STATE_CONNECTED);
+        post_cloud_event("call_start");
     } else if (event->type == ESP_WEBRTC_EVENT_CONNECT_FAILED || event->type == ESP_WEBRTC_EVENT_DISCONNECTED) {
         door_bell_change_state(DOOR_BELL_STATE_NONE);
+        post_cloud_event("call_end");
     }
     return 0;
 }
@@ -154,7 +167,29 @@ void send_cmd(char *cmd)
             door_bell_state = DOOR_BELL_STATE_RINGING;
             play_tone(DOOR_BELL_TONE_RING); // Play 4-second AAC ring tone on local speaker
         }
+        post_cloud_event("ring");
+    } else if (SAME_STR(cmd, "open_door")) {
+        if (webrtc) {
+            SEND_CMD(webrtc, DOOR_BELL_DOOR_OPENED_CMD);
+        }
+        play_tone(DOOR_BELL_TONE_OPEN_DOOR);
+        post_cloud_event("open_door");
+    } else if (SAME_STR(cmd, "record_start")) {
+        post_cloud_event("record_start");
+    } else if (SAME_STR(cmd, "record_stop")) {
+        post_cloud_event("record_stop");
+    } else if (SAME_STR(cmd, "photo_capture")) {
+        post_cloud_event("photo_capture");
     }
+}
+
+static void cloud_command_handler(const char *command)
+{
+    if (command == NULL) {
+        return;
+    }
+    ESP_LOGI(TAG, "Cloud command received: %s", command);
+    send_cmd((char *)command);
 }
 
 static void key_monitor_thread(void *arg)
@@ -201,6 +236,14 @@ int start_webrtc(char *url)
         esp_webrtc_close(webrtc);
         webrtc = NULL;
     }
+    const char *room = strrchr(url, '/');
+    if (room && room[1]) {
+        strlcpy(active_room_name, room + 1, sizeof(active_room_name));
+    } else {
+        active_room_name[0] = 0;
+    }
+    cloud_client_set_command_handler(cloud_command_handler);
+    cloud_client_start_mqtt();
     monitor_key = true;
     media_lib_thread_handle_t key_thread;
     media_lib_thread_create_from_scheduler(&key_thread, "Key", key_monitor_thread, NULL);

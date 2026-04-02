@@ -25,6 +25,7 @@
 #include "settings.h"
 #include "common.h"
 #include "esp_capture.h"
+#include "cloud_client.h"
 
 static const char *TAG = "Webrtc_Test";
 
@@ -316,6 +317,15 @@ static char* gen_room_id_use_mac(void)
     return room_mac;
 }
 
+static const char *gen_device_id_use_mac(void)
+{
+    static char device_id[16];
+    uint8_t mac[6];
+    network_get_mac(mac);
+    snprintf(device_id, sizeof(device_id), "esp-%02x%02x%02x", mac[3], mac[4], mac[5]);
+    return device_id;
+}
+
 static int network_event_handler(bool connected)
 {
     if (connected) {
@@ -370,6 +380,7 @@ void app_main(void)
     init_board();              // Hardware init: codec, camera, I2S, LCD
     media_sys_buildup();       // Steps 0-8: codecs registered, camera + mic streaming
     init_console();            // Serial REPL ready ("esp>" prompt)
+    cloud_client_init(gen_device_id_use_mac());
     network_init(WIFI_SSID, WIFI_PASSWORD, network_event_handler); // Connect Wi-Fi -> Step A
     while (1) {
         media_lib_thread_sleep(2000);

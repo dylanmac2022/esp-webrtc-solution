@@ -64,6 +64,36 @@ extern "C" {
 
 #define WEBRTC_SUPPORT_OPUS
 
+/**
+ * @brief  Lab 7 cloud API base URL (example: https://xxxx.execute-api.us-east-1.amazonaws.com)
+ */
+#define CLOUD_API_BASE_URL ""
+
+/**
+ * @brief  API key used for authenticated device requests to Lab 7 cloud APIs
+ */
+#define CLOUD_DEVICE_API_KEY ""
+
+/**
+ * @brief  AWS IoT Core endpoint host (without protocol), e.g. a1b2c3d4e5f6-ats.iot.us-east-1.amazonaws.com
+ */
+#define AWS_IOT_ENDPOINT ""
+
+/**
+ * @brief  MQTT topic prefix used by cloud command publish API
+ */
+#define AWS_IOT_TOPIC_PREFIX "doorbell"
+
+/**
+ * @brief  PEM-formatted AWS IoT thing certificate
+ */
+#define AWS_IOT_CLIENT_CERT_PEM ""
+
+/**
+ * @brief  PEM-formatted AWS IoT thing private key
+ */
+#define AWS_IOT_CLIENT_KEY_PEM  ""
+
 #ifdef __cplusplus
 }
 #endif
