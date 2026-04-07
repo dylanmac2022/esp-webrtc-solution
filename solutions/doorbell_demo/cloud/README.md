@@ -20,6 +20,8 @@ This folder contains a deployable AWS SAM backend for the Lab 7 doorbell cloud f
    - `sam deploy --guided`
 3. Provide parameters when prompted:
    - `DeviceApiKey`
+   - `MediaTransitionDays`
+   - `MediaExpireDays`
    - `LivekitWsUrl`
    - `LivekitApiKey`
    - `LivekitApiSecret`
@@ -38,6 +40,9 @@ Important fields:
 - `roomName`
 - `s3Keys` (map of media type to object key)
 - `uploadStatus`
+
+Idempotency support:
+- A dedicated `doorbell_event_ids` table is used to deduplicate `eventId` writes.
 
 ## Notes
 

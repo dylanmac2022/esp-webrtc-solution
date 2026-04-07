@@ -31,12 +31,12 @@ extern "C" {
 /**
  * @brief  Set for wifi ssid
  */
-#define WIFI_SSID     "Galaxy24"
+#define WIFI_SSID     "YOUR_WIFI_SSID"
 
 /**
  * @brief  Set for wifi password
  */
-#define WIFI_PASSWORD "Dylan1234"
+#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
 
 /**
  * @brief  Whether enable data channel
@@ -92,7 +92,7 @@ extern "C" {
 /**
  * @brief  PEM-formatted AWS IoT thing private key
  */
-#define AWS_IOT_CLIENT_KEY_PEM  ""
+#define AWS_IOT_CLIENT_KEY_PEM ""
 
 #ifdef __cplusplus
 }

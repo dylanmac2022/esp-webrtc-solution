@@ -1,13 +1,13 @@
 const { AccessToken } = require("livekit-server-sdk");
 const { required } = require("../lib/env");
-const { ok, badRequest, internalError } = require("../lib/http");
+const { ok, badRequest, internalError, unauthorized } = require("../lib/http");
 const { correlationId, parseJsonBody, requireApiKey } = require("../lib/request");
 
 exports.handler = async (event) => {
   const reqId = correlationId(event);
   try {
     if (!requireApiKey(event)) {
-      return badRequest("API key required", reqId);
+      return unauthorized("Missing/invalid API key", reqId);
     }
 
     const body = parseJsonBody(event);

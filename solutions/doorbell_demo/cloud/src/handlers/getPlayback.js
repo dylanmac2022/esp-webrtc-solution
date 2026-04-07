@@ -26,17 +26,16 @@ exports.handler = async (event) => {
     const query = await db.send(
       new QueryCommand({
         TableName: required("EVENTS_TABLE"),
-        KeyConditionExpression: "deviceId = :d",
-        FilterExpression: "eventId = :e",
+        IndexName: "eventId-index",
+        KeyConditionExpression: "eventId = :e",
         ExpressionAttributeValues: {
-          ":d": deviceId,
           ":e": eventId,
         },
-        Limit: 1,
+        Limit: 5,
       })
     );
 
-    const item = query.Items?.[0];
+    const item = (query.Items || []).find((it) => it.deviceId === deviceId);
     if (!item?.s3Keys) {
       return badRequest("No playback media for event", reqId);
     }

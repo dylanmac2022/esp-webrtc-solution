@@ -10,6 +10,7 @@ Globals:
     Environment:
       Variables:
         EVENTS_TABLE: !Ref EventsTable
+        EVENT_ID_TABLE: !Ref EventIdTable
         MEDIA_BUCKET: !Ref MediaBucket
 
 Parameters:
@@ -19,6 +20,12 @@ Parameters:
   DeviceApiKey:
     Type: String
     NoEcho: true
+  MediaTransitionDays:
+    Type: Number
+    Default: 30
+  MediaExpireDays:
+    Type: Number
+    Default: 90
   LivekitWsUrl:
     Type: String
   LivekitApiKey:
@@ -36,12 +43,49 @@ Resources:
   MediaBucket:
     Type: AWS::S3::Bucket
     Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       VersioningConfiguration:
         Status: Enabled
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionMediaToIA
+            Status: Enabled
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: !Ref MediaTransitionDays
+          - Id: ExpireNonImportantMedia
+            Status: Enabled
+            Filter:
+              Tag:
+                Key: important
+                Value: "false"
+            ExpirationInDays: !Ref MediaExpireDays
+
+  MediaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MediaBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt MediaBucket.Arn
+              - !Sub '${MediaBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
 
   EventsTable:
     Type: AWS::DynamoDB::Table
@@ -53,11 +97,54 @@ Resources:
           AttributeType: S
         - AttributeName: eventTs
           AttributeType: N
+        - AttributeName: sessionId
+          AttributeType: S
+        - AttributeName: eventType
+          AttributeType: S
+        - AttributeName: eventId
+          AttributeType: S
       KeySchema:
         - AttributeName: deviceId
           KeyType: HASH
         - AttributeName: eventTs
           KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: sessionId-index
+          KeySchema:
+            - AttributeName: sessionId
+              KeyType: HASH
+            - AttributeName: eventTs
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: eventType-index
+          KeySchema:
+            - AttributeName: eventType
+              KeyType: HASH
+            - AttributeName: eventTs
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: eventId-index
+          KeySchema:
+            - AttributeName: eventId
+              KeyType: HASH
+            - AttributeName: eventTs
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  EventIdTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      TableName: doorbell_event_ids
+      AttributeDefinitions:
+        - AttributeName: eventId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: eventId
+          KeyType: HASH
 
   Api:
     Type: AWS::Serverless::HttpApi
@@ -77,7 +164,7 @@ Resources:
   CommonFunctionPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: doorbell-lab7-common-policy
+      ManagedPolicyName: !Sub '${AWS::StackName}-common-policy'
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -86,6 +173,20 @@ Resources:
               - dynamodb:PutItem
               - dynamodb:Query
             Resource: !GetAtt EventsTable.Arn
+          - Effect: Allow
+            Action:
+              - dynamodb:Query
+            Resource: !Sub '${EventsTable.Arn}/index/*'
+          - Effect: Allow
+            Action:
+              - dynamodb:TransactWriteItems
+            Resource:
+              - !GetAtt EventsTable.Arn
+              - !GetAtt EventIdTable.Arn
+          - Effect: Allow
+            Action:
+              - dynamodb:PutItem
+            Resource: !GetAtt EventIdTable.Arn
           - Effect: Allow
             Action:
               - s3:GetObject
@@ -205,7 +306,7 @@ Resources:
             - Effect: Allow
               Action:
                 - iot:Publish
-              Resource: '*'
+              Resource: !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/${IotTopicPrefix}/*'
       Environment:
         Variables:
           CORS_ALLOW_ORIGIN: !Ref CorsAllowOrigin
@@ -227,3 +328,5 @@ Outputs:
     Value: !Ref MediaBucket
   EventsTableName:
     Value: !Ref EventsTable
+  EventIdTableName:
+    Value: !Ref EventIdTable

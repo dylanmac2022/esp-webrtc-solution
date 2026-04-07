@@ -1,5 +1,5 @@
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, TransactWriteCommand } = require("@aws-sdk/lib-dynamodb");
 const { ok, badRequest, internalError, unauthorized } = require("../lib/http");
 const { correlationId, parseJsonBody, requireApiKey } = require("../lib/request");
 const { required } = require("../lib/env");
@@ -50,16 +50,32 @@ exports.handler = async (event) => {
     };
 
     await db.send(
-      new PutCommand({
-        TableName: required("EVENTS_TABLE"),
-        Item: item,
-        ConditionExpression: "attribute_not_exists(eventId)",
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: required("EVENT_ID_TABLE"),
+              Item: {
+                eventId,
+                createdAt: item.createdAt,
+              },
+              ConditionExpression: "attribute_not_exists(eventId)",
+            },
+          },
+          {
+            Put: {
+              TableName: required("EVENTS_TABLE"),
+              Item: item,
+              ConditionExpression: "attribute_not_exists(deviceId) AND attribute_not_exists(eventTs)",
+            },
+          },
+        ],
       })
     );
 
     return ok({ eventId, created: true, correlationId: reqId });
   } catch (err) {
-    if (err.name === "ConditionalCheckFailedException") {
+    if (err.name === "ConditionalCheckFailedException" || err.name === "TransactionCanceledException") {
       return ok({ created: false, duplicate: true, correlationId: reqId });
     }
     console.error("createEvent failed", { reqId, err });
