@@ -19,6 +19,7 @@ Files:
 
 Implemented behavior:
 - Device ID generated from MAC and passed to cloud client.
+- LiveKit token fetch from `/token/livekit` at session start (publisher role).
 - Event metadata posting to API `/events` for:
   - `ring`
   - `open_door`
@@ -29,6 +30,9 @@ Implemented behavior:
   - `record_start`
   - `record_stop`
   - `photo_capture`
+- Device media upload flow integrated:
+  - `photo_capture`: captures MJPEG frame from camera pipeline, requests pre-signed upload URL, uploads snapshot object, posts event with `s3Keys.snapshot`.
+  - `record_stop`: requests pre-signed upload URL, uploads audio object, posts event with `s3Keys.audio`.
 - MQTT subscription to AWS IoT topic:
   - `<topicPrefix>/<deviceId>/commands`
 - MQTT command handling mapped to device command flow.
@@ -86,6 +90,10 @@ Implemented UI functions:
 
 - ESP-IDF build executed successfully with cloud integration added.
 - Output binary generated: `build/doorbell_demo.bin`.
+
+## Current Limitation
+
+- Firmware signaling path is currently AppRTC-based in this project source (`esp_signaling_get_apprtc_impl`), so media publishing is not yet switched to native LiveKit signaling.
 
 ## Remaining Deployment Actions (Credential-Dependent)
 

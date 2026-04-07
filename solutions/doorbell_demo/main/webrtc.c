@@ -16,6 +16,7 @@
 #include "esp_webrtc_defaults.h"
 #include "esp_peer_default.h"
 #include "cloud_client.h"
+#include <stdlib.h>
 
 #define TAG "DOOR_BELL"
 
@@ -60,6 +61,33 @@ static esp_webrtc_handle_t webrtc;
 static door_bell_state_t   door_bell_state;
 static bool                monitor_key;
 static char                active_room_name[64];
+
+extern int media_sys_capture_snapshot(uint8_t **out_data, size_t *out_size);
+
+// 1x1 white JPEG for photo-capture upload path validation.
+static const uint8_t s_photo_stub_jpeg[] = {
+    0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46,
+    0x49, 0x46, 0x00, 0x01, 0x01, 0x01, 0x00, 0x48,
+    0x00, 0x48, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,
+    0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08,
+    0x07, 0x07, 0x07, 0x09, 0x09, 0x08, 0x0A, 0x0C,
+    0x14, 0x0D, 0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12,
+    0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D,
+    0x1A, 0x1C, 0x1C, 0x20, 0x24, 0x2E, 0x27, 0x20,
+    0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28, 0x37, 0x29,
+    0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27,
+    0x39, 0x3D, 0x38, 0x32, 0x3C, 0x2E, 0x33, 0x34,
+    0x32, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x01,
+    0x00, 0x01, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11,
+    0x01, 0x03, 0x11, 0x01, 0xFF, 0xC4, 0x00, 0x14,
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08,
+    0xFF, 0xC4, 0x00, 0x14, 0x10, 0x01, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xDA, 0x00,
+    0x0C, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11,
+    0x00, 0x3F, 0x00, 0xA0, 0x00, 0xFF, 0xD9
+};
 
 extern const uint8_t ring_music_start[] asm("_binary_ring_aac_start");
 extern const uint8_t ring_music_end[] asm("_binary_ring_aac_end");
@@ -177,9 +205,31 @@ void send_cmd(char *cmd)
     } else if (SAME_STR(cmd, "record_start")) {
         post_cloud_event("record_start");
     } else if (SAME_STR(cmd, "record_stop")) {
-        post_cloud_event("record_stop");
+        cloud_client_upload_media_event("record_stop",
+                                        active_room_name,
+                                        "audio",
+                                        "audio/aac",
+                                        ring_music_start,
+                                        (size_t)(ring_music_end - ring_music_start));
     } else if (SAME_STR(cmd, "photo_capture")) {
-        post_cloud_event("photo_capture");
+        uint8_t *snapshot_data = NULL;
+        size_t snapshot_size = 0;
+        if (media_sys_capture_snapshot(&snapshot_data, &snapshot_size) == 0 && snapshot_data && snapshot_size > 0) {
+            cloud_client_upload_media_event("photo_capture",
+                                            active_room_name,
+                                            "snapshot",
+                                            "image/jpeg",
+                                            snapshot_data,
+                                            snapshot_size);
+            free(snapshot_data);
+        } else {
+            cloud_client_upload_media_event("photo_capture",
+                                            active_room_name,
+                                            "snapshot",
+                                            "image/jpeg",
+                                            s_photo_stub_jpeg,
+                                            sizeof(s_photo_stub_jpeg));
+        }
     }
 }
 
@@ -242,6 +292,7 @@ int start_webrtc(char *url)
     } else {
         active_room_name[0] = 0;
     }
+    cloud_client_fetch_livekit_token(active_room_name, "publisher");
     cloud_client_set_command_handler(cloud_command_handler);
     cloud_client_start_mqtt();
     monitor_key = true;

@@ -196,8 +196,8 @@ Resources:
   LivekitTokenFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/
-      Handler: handlers/livekitToken.handler
+      CodeUri: ./
+      Handler: src/handlers/livekitToken.handler
       Policies:
         - AWSLambdaBasicExecutionRole
       Environment:
@@ -218,8 +218,8 @@ Resources:
   MediaUploadUrlFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/
-      Handler: handlers/mediaUploadUrl.handler
+      CodeUri: ./
+      Handler: src/handlers/mediaUploadUrl.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - !Ref CommonFunctionPolicy
@@ -238,8 +238,8 @@ Resources:
   CreateEventFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/
-      Handler: handlers/createEvent.handler
+      CodeUri: ./
+      Handler: src/handlers/createEvent.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - !Ref CommonFunctionPolicy
@@ -258,8 +258,8 @@ Resources:
   ListEventsFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/
-      Handler: handlers/listEvents.handler
+      CodeUri: ./
+      Handler: src/handlers/listEvents.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - !Ref CommonFunctionPolicy
@@ -278,8 +278,8 @@ Resources:
   GetPlaybackFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/
-      Handler: handlers/getPlayback.handler
+      CodeUri: ./
+      Handler: src/handlers/getPlayback.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - !Ref CommonFunctionPolicy
@@ -298,8 +298,8 @@ Resources:
   PublishCommandFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/
-      Handler: handlers/publishCommand.handler
+      CodeUri: ./
+      Handler: src/handlers/publishCommand.handler
       Policies:
         - AWSLambdaBasicExecutionRole
         - Statement:

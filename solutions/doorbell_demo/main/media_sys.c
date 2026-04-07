@@ -25,6 +25,8 @@
 #include "esp_audio_dec_default.h"
 #include "esp_capture_defaults.h"
 #include "esp_capture_sink.h"
+#include <stdlib.h>
+#include <string.h>
 
 #define TAG "MEDIA_SYS"
 
@@ -53,6 +55,7 @@ typedef struct {
 
 static capture_system_t capture_sys;
 static player_system_t  player_sys;
+static esp_capture_sink_handle_t s_snapshot_sink;
 
 static bool           music_playing  = false;
 static bool           music_stopping = false;
@@ -264,6 +267,57 @@ int media_sys_get_provider(esp_webrtc_media_provider_t *provide)
     // received from the browser to the local speaker/LCD.
     provide->capture = capture_sys.capture_handle; // Source: camera + mic -> browser
     provide->player  = player_sys.player;          // Sink:   browser audio -> speaker
+    return 0;
+}
+
+int media_sys_capture_snapshot(uint8_t **out_data, size_t *out_size)
+{
+    if (!out_data || !out_size) {
+        return -1;
+    }
+    *out_data = NULL;
+    *out_size = 0;
+
+    if (s_snapshot_sink == NULL) {
+        esp_capture_sink_cfg_t sink_cfg = {
+            .audio_info = {
+                .format_id = ESP_CAPTURE_FMT_ID_G711A,
+                .sample_rate = 8000,
+                .channel = 1,
+                .bits_per_sample = 16,
+            },
+            .video_info = {
+                .format_id = ESP_CAPTURE_FMT_ID_MJPEG,
+                .width = VIDEO_WIDTH,
+                .height = VIDEO_HEIGHT,
+                .fps = VIDEO_FPS,
+            },
+        };
+        if (esp_capture_sink_setup(capture_sys.capture_handle, 0, &sink_cfg, &s_snapshot_sink) != ESP_CAPTURE_ERR_OK) {
+            ESP_LOGW(TAG, "Failed to setup snapshot sink");
+            return -1;
+        }
+        esp_capture_sink_enable(s_snapshot_sink, ESP_CAPTURE_RUN_MODE_ALWAYS);
+    }
+
+    esp_capture_stream_frame_t frame = {
+        .stream_type = ESP_CAPTURE_STREAM_TYPE_VIDEO,
+    };
+    if (esp_capture_sink_acquire_frame(s_snapshot_sink, &frame, true) != ESP_CAPTURE_ERR_OK || frame.size <= 0) {
+        ESP_LOGW(TAG, "Failed to capture snapshot frame");
+        return -1;
+    }
+
+    uint8_t *copy = malloc(frame.size);
+    if (!copy) {
+        esp_capture_sink_release_frame(s_snapshot_sink, &frame);
+        return -1;
+    }
+    memcpy(copy, frame.data, frame.size);
+    esp_capture_sink_release_frame(s_snapshot_sink, &frame);
+
+    *out_data = copy;
+    *out_size = frame.size;
     return 0;
 }
 
