@@ -381,7 +381,11 @@ void app_main(void)
     media_sys_buildup();       // Steps 0-8: codecs registered, camera + mic streaming
     init_console();            // Serial REPL ready ("esp>" prompt)
     cloud_client_init(gen_device_id_use_mac());
-    network_init(WIFI_SSID, WIFI_PASSWORD, network_event_handler); // Connect Wi-Fi -> Step A
+    /* network_init() has internal retry logic for esp_wifi_init to handle transient Hosted startup delays */
+    int net_ret = network_init(WIFI_SSID, WIFI_PASSWORD, network_event_handler); // Connect Wi-Fi -> Step A
+    if (net_ret != 0) {
+        ESP_LOGE(TAG, "network_init failed: 0x%x, running without cloud link", net_ret);
+    }
     while (1) {
         media_lib_thread_sleep(2000);
         query_webrtc(); // Print RTP send/recv counters every 2 s (V:XXXX A:XXXX in log)

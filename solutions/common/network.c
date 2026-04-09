@@ -13,6 +13,8 @@
 #include <string.h>
 #include <nvs_flash.h>
 #include <sys/param.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "network.h"
@@ -26,7 +28,11 @@
 
 #define TAG "NETWORK"
 
+#define WIFI_INIT_RETRY_MAX 5
+#define WIFI_INIT_RETRY_DELAY_MS 1000
+
 static bool               network_connected = false;
+static bool               network_initialized = false;  /* guard against double init */
 static network_connect_cb connect_cb;
 
 static void network_set_connected(bool connected)
@@ -124,26 +130,51 @@ static void event_handler(void *arg, esp_event_base_t event_base,
 
 int network_init(const char *ssid, const char *password, network_connect_cb cb)
 {
-    ESP_ERROR_CHECK(nvs_flash_init());
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+    /* One-time network infrastructure setup - guard against multiple calls */
+    if (!network_initialized) {
+        ESP_ERROR_CHECK(nvs_flash_init());
+        ESP_ERROR_CHECK(esp_netif_init());
+        ESP_ERROR_CHECK(esp_event_loop_create_default());
+        esp_netif_create_default_wifi_sta();
+        network_initialized = true;
+    }
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    esp_err_t ret = ESP_FAIL;
+    for (int attempt = 1; attempt <= WIFI_INIT_RETRY_MAX; attempt++) {
+        ret = esp_wifi_init(&cfg);
+        if (ret == ESP_OK) {
+            break;
+        }
+        ESP_LOGW(TAG, "esp_wifi_init failed (0x%x), retry %d/%d", ret, attempt, WIFI_INIT_RETRY_MAX);
+        vTaskDelay(pdMS_TO_TICKS(WIFI_INIT_RETRY_DELAY_MS));
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_init failed after retries: 0x%x", ret);
+        return ret;
+    }
 
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &event_handler,
-                                                        NULL,
-                                                        &instance_any_id));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &event_handler,
-                                                        NULL,
-                                                        &instance_got_ip));
+    ret = esp_event_handler_instance_register(WIFI_EVENT,
+                                              ESP_EVENT_ANY_ID,
+                                              &event_handler,
+                                              NULL,
+                                              &instance_any_id);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "register WIFI_EVENT handler failed: 0x%x", ret);
+        return ret;
+    }
+
+    ret = esp_event_handler_instance_register(IP_EVENT,
+                                              IP_EVENT_STA_GOT_IP,
+                                              &event_handler,
+                                              NULL,
+                                              &instance_got_ip);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "register IP_EVENT handler failed: 0x%x", ret);
+        return ret;
+    }
     wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     if (load_from_nvs()) {
         ESP_LOGI(TAG, "Force to use wifi config from nvs");
@@ -156,10 +187,22 @@ int network_init(const char *ssid, const char *password, network_connect_cb cb)
         }
     }
     connect_cb = cb;
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ret = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_mode failed: 0x%x", ret);
+        return ret;
+    }
+    ret = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_config failed: 0x%x", ret);
+        return ret;
+    }
     esp_wifi_set_ps(WIFI_PS_NONE);
-    ESP_ERROR_CHECK(esp_wifi_start());
+    ret = esp_wifi_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_start failed: 0x%x", ret);
+        return ret;
+    }
     ESP_LOGI(TAG, "wifi_init_sta finished.");
     return 0;
 }
