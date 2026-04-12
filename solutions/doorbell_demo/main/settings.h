@@ -74,6 +74,11 @@ extern "C" {
  */
 #define CLOUD_ENABLED       (true)
 
+/**
+ * @brief  Device API key placeholder (provision from NVS; do not commit real key)
+ */
+#define CLOUD_DEVICE_API_KEY ""
+
 #ifdef __cplusplus
 }
 #endif

@@ -13,8 +13,11 @@
 #include <esp_random.h>
 #include <esp_system.h>
 #include <esp_mac.h>
+#include <esp_http_client.h>
+#include <esp_crt_bundle.h>
 #include <nvs_flash.h>
 #include <sys/param.h>
+#include <cJSON.h>
 #include "argtable3/argtable3.h"
 #include "esp_console.h"
 #include "esp_webrtc.h"
@@ -35,7 +38,11 @@ static struct {
     struct arg_end *end;
 } room_args;
 
-static char room_url[128];
+static char room_url[192];
+static char cloud_token[1800];
+static char cloud_room_name[64];
+static char cloud_ws_url[128];
+static int cloud_expires_in_sec = 0;
 
 #define RUN_ASYNC(name, body)           \
     void run_async##name(void *arg)     \
@@ -317,6 +324,92 @@ static void cloud_config_init(void)
     ESP_LOGI(CLOUD_TAG, "ApiKey=configured-via-nvs (not stored in firmware)");
 }
 
+static void cloud_get_device_id(char *out, size_t out_size)
+{
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(out, out_size, "esp32p4-%02x%02x%02x", mac[3], mac[4], mac[5]);
+}
+
+static bool cloud_fetch_livekit_token(const char *device_id, const char *room_name)
+{
+    if (!CLOUD_ENABLED) {
+        return false;
+    }
+    if (CLOUD_DEVICE_API_KEY[0] == '\0') {
+        ESP_LOGW(CLOUD_TAG, "Device API key not provisioned yet; skipping cloud token fetch");
+        return false;
+    }
+
+    char url[160];
+    snprintf(url, sizeof(url), "%s/token/livekit", CLOUD_API_BASE_URL);
+    char body[256];
+    snprintf(body, sizeof(body), "{\"deviceId\":\"%s\",\"roomName\":\"%s\",\"role\":\"publisher\"}",
+             device_id, room_name);
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 10000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        ESP_LOGE(CLOUD_TAG, "Failed to create HTTP client");
+        return false;
+    }
+
+    esp_http_client_set_header(client, "content-type", "application/json");
+    esp_http_client_set_header(client, "x-api-key", CLOUD_DEVICE_API_KEY);
+    esp_http_client_set_post_field(client, body, strlen(body));
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+
+    char resp[2300] = {0};
+    int read_len = esp_http_client_read_response(client, resp, sizeof(resp) - 1);
+    if (read_len < 0) {
+        read_len = 0;
+    }
+    resp[read_len] = '\0';
+
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(CLOUD_TAG, "Token request failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    if (status != 200) {
+        ESP_LOGE(CLOUD_TAG, "Token request HTTP %d: %s", status, resp);
+        return false;
+    }
+
+    cJSON *root = cJSON_Parse(resp);
+    if (!root) {
+        ESP_LOGE(CLOUD_TAG, "Token response JSON parse failed");
+        return false;
+    }
+    cJSON *token = cJSON_GetObjectItem(root, "token");
+    cJSON *json_room = cJSON_GetObjectItem(root, "roomName");
+    cJSON *ws_url = cJSON_GetObjectItem(root, "wsUrl");
+    cJSON *expires = cJSON_GetObjectItem(root, "expiresInSec");
+    if (!cJSON_IsString(token) || !cJSON_IsString(json_room) || !cJSON_IsString(ws_url)) {
+        cJSON_Delete(root);
+        ESP_LOGE(CLOUD_TAG, "Token response missing required fields");
+        return false;
+    }
+
+    snprintf(cloud_token, sizeof(cloud_token), "%s", token->valuestring);
+    snprintf(cloud_room_name, sizeof(cloud_room_name), "%s", json_room->valuestring);
+    snprintf(cloud_ws_url, sizeof(cloud_ws_url), "%s", ws_url->valuestring);
+    cloud_expires_in_sec = cJSON_IsNumber(expires) ? expires->valueint : 0;
+    cJSON_Delete(root);
+
+    ESP_LOGI(CLOUD_TAG, "Token received, expiresInSec=%d", cloud_expires_in_sec);
+    ESP_LOGI(CLOUD_TAG, "wsUrl=%s", cloud_ws_url);
+    return true;
+}
+
 static char* gen_room_id_use_mac(void)
 {
     // Generate a unique room ID using the last 3 bytes of the Wi-Fi MAC address
@@ -344,10 +437,19 @@ static int network_event_handler(bool connected)
         RUN_ASYNC(start, {
             int ret = -1;
             char *room = NULL;
+            char device_id[24];
+            cloud_get_device_id(device_id, sizeof(device_id));
             for (int attempt = 0; attempt < 3; attempt++) {
                 room = gen_room_id_use_mac(); // New random nonce each attempt
-                snprintf(room_url, sizeof(room_url), "%s/join/%s", server_url, room);
-                ESP_LOGI(TAG, "Start to join in room %s", room);
+                ESP_LOGI(CLOUD_TAG, "Requesting LiveKit token for room %s", room);
+                bool token_ok = cloud_fetch_livekit_token(device_id, room);
+                if (token_ok) {
+                    snprintf(room_url, sizeof(room_url), "%s/join/%s", server_url, cloud_room_name);
+                    ESP_LOGW(CLOUD_TAG, "LiveKit token fetched; AppRTC signaling remains active for this step");
+                } else {
+                    snprintf(room_url, sizeof(room_url), "%s/join/%s", server_url, room);
+                }
+                ESP_LOGI(TAG, "Start to join in room %s", token_ok ? cloud_room_name : room);
                 ret = start_webrtc(room_url);
                 if (ret == 0) {
                     break; // Room joined successfully

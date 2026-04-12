@@ -376,3 +376,7 @@ Commit:
 14. Step 5: Passed
 15. Evidence: Firmware cloud config layer added and verified after build, flash, and monitor. Boot logs show `CLOUD` initialization lines including `Cloud config loaded`, derived `DeviceId=esp32p4-d5c7e8`, and configured API base URL.
 16. Notes: `cloud_config_init()` now runs at startup, uses `esp_read_mac(..., ESP_MAC_WIFI_STA)` to derive device ID before network init, and does not embed secrets (API key remains NVS-injected).
+
+17. Step 6: In Progress (implementation complete; final runtime token-success proof pending)
+18. Evidence so far: Added firmware `POST /token/livekit` client path with JSON parse (`token`, `roomName`, `wsUrl`, `expiresInSec`), integrated into join startup path, then completed Build + Flash on COM9.
+19. Pending for pass: Monitor lines showing `CLOUD: Requesting LiveKit token` followed by `CLOUD: Token received, expiresInSec=...` with provisioned API key.
