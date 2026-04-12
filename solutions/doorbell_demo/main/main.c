@@ -17,6 +17,7 @@
 #include <esp_crt_bundle.h>
 #include <nvs_flash.h>
 #include <sys/param.h>
+#include <stdlib.h>
 #include <cJSON.h>
 #include "argtable3/argtable3.h"
 #include "esp_console.h"
@@ -43,6 +44,32 @@ static char cloud_token[1800];
 static char cloud_room_name[64];
 static char cloud_ws_url[128];
 static int cloud_expires_in_sec = 0;
+
+typedef struct {
+    char *buf;
+    int cap;
+    int len;
+} cloud_http_resp_t;
+
+static esp_err_t cloud_http_event_handler(esp_http_client_event_t *evt)
+{
+    if (!evt || !evt->user_data) {
+        return ESP_OK;
+    }
+    cloud_http_resp_t *resp = (cloud_http_resp_t *)evt->user_data;
+    if (evt->event_id == HTTP_EVENT_ON_DATA && evt->data && evt->data_len > 0) {
+        int copy = evt->data_len;
+        if (resp->len + copy > resp->cap - 1) {
+            copy = (resp->cap - 1) - resp->len;
+        }
+        if (copy > 0) {
+            memcpy(resp->buf + resp->len, evt->data, copy);
+            resp->len += copy;
+            resp->buf[resp->len] = '\0';
+        }
+    }
+    return ESP_OK;
+}
 
 #define RUN_ASYNC(name, body)           \
     void run_async##name(void *arg)     \
@@ -315,7 +342,8 @@ static void cloud_config_init(void)
         return;
     }
     uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);  // eFuse: available before network_init
+    // Use base eFuse MAC here to avoid target-specific STA MAC-type errors.
+    esp_efuse_mac_get_default(mac);
     char device_id[24];
     snprintf(device_id, sizeof(device_id), "esp32p4-%02x%02x%02x", mac[3], mac[4], mac[5]);
     ESP_LOGI(CLOUD_TAG, "Cloud config loaded");
@@ -327,7 +355,9 @@ static void cloud_config_init(void)
 static void cloud_get_device_id(char *out, size_t out_size)
 {
     uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    if (network_get_mac(mac) != 0) {
+        esp_efuse_mac_get_default(mac);
+    }
     snprintf(out, out_size, "esp32p4-%02x%02x%02x", mac[3], mac[4], mac[5]);
 }
 
@@ -338,8 +368,10 @@ static bool cloud_fetch_livekit_token(const char *device_id, const char *room_na
     }
     if (CLOUD_DEVICE_API_KEY[0] == '\0') {
         ESP_LOGW(CLOUD_TAG, "Device API key not provisioned yet; skipping cloud token fetch");
+        ESP_LOGW(CLOUD_TAG, "ApiKeyPresent=false (set CLOUD_DEVICE_API_KEY or NVS source)");
         return false;
     }
+    ESP_LOGI(CLOUD_TAG, "ApiKeyPresent=true");
 
     char url[160];
     snprintf(url, sizeof(url), "%s/token/livekit", CLOUD_API_BASE_URL);
@@ -347,14 +379,29 @@ static bool cloud_fetch_livekit_token(const char *device_id, const char *room_na
     snprintf(body, sizeof(body), "{\"deviceId\":\"%s\",\"roomName\":\"%s\",\"role\":\"publisher\"}",
              device_id, room_name);
 
+    size_t resp_cap = 8192;
+    char *resp = (char *)calloc(resp_cap, 1);
+    if (!resp) {
+        ESP_LOGE(CLOUD_TAG, "Out of memory allocating token response buffer");
+        return false;
+    }
+    cloud_http_resp_t resp_ctx = {
+        .buf = resp,
+        .cap = (int)resp_cap,
+        .len = 0,
+    };
+
     esp_http_client_config_t cfg = {
         .url = url,
         .method = HTTP_METHOD_POST,
         .timeout_ms = 10000,
         .crt_bundle_attach = esp_crt_bundle_attach,
+        .event_handler = cloud_http_event_handler,
+        .user_data = &resp_ctx,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {
+        free(resp);
         ESP_LOGE(CLOUD_TAG, "Failed to create HTTP client");
         return false;
     }
@@ -365,28 +412,29 @@ static bool cloud_fetch_livekit_token(const char *device_id, const char *room_na
 
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
-
-    char resp[2300] = {0};
-    int read_len = esp_http_client_read_response(client, resp, sizeof(resp) - 1);
-    if (read_len < 0) {
-        read_len = 0;
-    }
-    resp[read_len] = '\0';
-
+    int content_len = esp_http_client_get_content_length(client);
+    int read_len = resp_ctx.len;
     esp_http_client_cleanup(client);
 
     if (err != ESP_OK) {
         ESP_LOGE(CLOUD_TAG, "Token request failed: %s", esp_err_to_name(err));
+        free(resp);
         return false;
     }
     if (status != 200) {
         ESP_LOGE(CLOUD_TAG, "Token request HTTP %d: %s", status, resp);
+        free(resp);
         return false;
     }
 
-    cJSON *root = cJSON_Parse(resp);
+    cJSON *root = cJSON_ParseWithLength(resp, read_len);
     if (!root) {
-        ESP_LOGE(CLOUD_TAG, "Token response JSON parse failed");
+        ESP_LOGE(CLOUD_TAG, "Token response JSON parse failed (status=%d, read=%d, content_len=%d)",
+                 status, read_len, content_len);
+        if (read_len >= (int)(resp_cap - 1)) {
+            ESP_LOGE(CLOUD_TAG, "Token response may be truncated; increase response buffer size");
+        }
+        free(resp);
         return false;
     }
     cJSON *token = cJSON_GetObjectItem(root, "token");
@@ -404,6 +452,7 @@ static bool cloud_fetch_livekit_token(const char *device_id, const char *room_na
     snprintf(cloud_ws_url, sizeof(cloud_ws_url), "%s", ws_url->valuestring);
     cloud_expires_in_sec = cJSON_IsNumber(expires) ? expires->valueint : 0;
     cJSON_Delete(root);
+    free(resp);
 
     ESP_LOGI(CLOUD_TAG, "Token received, expiresInSec=%d", cloud_expires_in_sec);
     ESP_LOGI(CLOUD_TAG, "wsUrl=%s", cloud_ws_url);
