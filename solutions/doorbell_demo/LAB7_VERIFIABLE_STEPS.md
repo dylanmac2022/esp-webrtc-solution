@@ -15,6 +15,22 @@ Build Lab 7 in small, testable increments from your known-good Lab 6 baseline. E
 3. Keep a short evidence log per step: command run, expected result, actual result, pass/fail.
 4. Never commit secrets.
 
+## Mandatory Verification Loop (Every Step)
+
+Use this loop for every step so results are visible and repeatable:
+
+1. Run firmware gate command: `ESP-IDF: Build, Flash and Monitor`.
+2. Capture monitor evidence lines (at least 3 lines that prove correct behavior).
+3. Run step-specific validation (API/script/UI check).
+4. If code changed in the step, run `Build, Flash and Monitor` again after the change.
+5. Commit only after both checks pass.
+
+For cloud-only steps (Step 1 to Step 4), still run monitor and capture baseline device health lines:
+
+1. Wi-Fi connected log line.
+2. Room join prompt line.
+3. No new runtime error lines during the check window.
+
 ## Baseline Freeze (Step 0)
 
 Goal: Protect your working Lab 6 state before cloud work.
@@ -336,3 +352,19 @@ Commit:
 2. Device API key is injected via secure config, not hardcoded.
 3. Temporary cloud resources are documented for cleanup.
 4. After grading, disable or delete cloud resources to avoid charges.
+
+## Execution Status (Live)
+
+1. Step 0: Passed
+2. Evidence: Build and flash completed; monitor shows Wi-Fi got IP, room join start, signaling success, and room prompt.
+3. Note: `LCD_RENDER: Invalid argument to open` and `MEDIA_SYS: Fail to create video render` are present, but WebRTC room join and signaling still work.
+
+4. Step 1: Passed
+5. Evidence: CloudFormation stack `doorbell-lab7` is `UPDATE_COMPLETE`; all six API routes respond and are API-key protected.
+
+6. Step 2: Passed
+7. Evidence: `npm run verify:livekit` returns `PASS: LiveKit is configured and reachable.`
+
+8. Step 3: Passed
+9. Evidence: `npm run verify:aws` → `PASS: AWS backend path verified.` eventId=evt-1776027869854, s3Key confirmed.
+10. Fixes applied: (1) created DynamoDB GSI `eventId-index`; (2) redeployed `GetPlaybackFunction` with correct GSI query code; (3) updated `doorbell-lab7-common-policy` to add `table/doorbell_events/index/*` to Query resource.
