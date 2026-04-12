@@ -368,3 +368,7 @@ Commit:
 8. Step 3: Passed
 9. Evidence: `npm run verify:aws` → `PASS: AWS backend path verified.` eventId=evt-1776027869854, s3Key confirmed.
 10. Fixes applied: (1) created DynamoDB GSI `eventId-index`; (2) redeployed `GetPlaybackFunction` with correct GSI query code; (3) updated `doorbell-lab7-common-policy` to add `table/doorbell_events/index/*` to Query resource.
+
+11. Step 4: Passed
+12. Evidence: `POST /device/command` → `{"published":true,"topic":"doorbell/esp32p4-d5c7e8/commands","correlationId":"buaD8hmdCYcEMYQ="}`. CloudWatch shows clean invocation with no errors. Firmware flashed to COM9, MAC 80:f1:b2:d1:ec:63.
+13. Fix applied: `PublishCommandFunction` had missing `https://` scheme on IoT endpoint — fixed in source and redeployed.
