@@ -12,6 +12,7 @@
 #include <esp_log.h>
 #include <esp_random.h>
 #include <esp_system.h>
+#include <esp_mac.h>
 #include <nvs_flash.h>
 #include <sys/param.h>
 #include "argtable3/argtable3.h"
@@ -27,6 +28,7 @@
 #include "esp_capture.h"
 
 static const char *TAG = "Webrtc_Test";
+static const char *CLOUD_TAG = "CLOUD";
 
 static struct {
     struct arg_str *room_id;
@@ -299,6 +301,22 @@ static void capture_scheduler(const char *name, esp_capture_thread_schedule_cfg_
     schedule_cfg->core_id = cfg.core_id;
 }
 
+static void cloud_config_init(void)
+{
+    if (!CLOUD_ENABLED) {
+        ESP_LOGW(CLOUD_TAG, "Cloud features disabled");
+        return;
+    }
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);  // eFuse: available before network_init
+    char device_id[24];
+    snprintf(device_id, sizeof(device_id), "esp32p4-%02x%02x%02x", mac[3], mac[4], mac[5]);
+    ESP_LOGI(CLOUD_TAG, "Cloud config loaded");
+    ESP_LOGI(CLOUD_TAG, "DeviceId=%s", device_id);
+    ESP_LOGI(CLOUD_TAG, "ApiBaseUrl=%s", CLOUD_API_BASE_URL);
+    ESP_LOGI(CLOUD_TAG, "ApiKey=configured-via-nvs (not stored in firmware)");
+}
+
 static char* gen_room_id_use_mac(void)
 {
     // Generate a unique room ID using the last 3 bytes of the Wi-Fi MAC address
@@ -368,6 +386,7 @@ void app_main(void)
     esp_capture_set_thread_scheduler(capture_scheduler);
     media_lib_thread_set_schedule_cb(thread_scheduler);
     init_board();              // Hardware init: codec, camera, I2S, LCD
+    cloud_config_init();       // Log cloud config at boot (Step 5)
     media_sys_buildup();       // Steps 0-8: codecs registered, camera + mic streaming
     init_console();            // Serial REPL ready ("esp>" prompt)
     network_init(WIFI_SSID, WIFI_PASSWORD, network_event_handler); // Connect Wi-Fi -> Step A

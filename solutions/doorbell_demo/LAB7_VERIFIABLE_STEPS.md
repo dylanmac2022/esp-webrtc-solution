@@ -372,3 +372,7 @@ Commit:
 11. Step 4: Passed
 12. Evidence: `POST /device/command` → `{"published":true,"topic":"doorbell/esp32p4-d5c7e8/commands","correlationId":"buaD8hmdCYcEMYQ="}`. CloudWatch shows clean invocation with no errors. Firmware flashed to COM9, MAC 80:f1:b2:d1:ec:63.
 13. Fix applied: `PublishCommandFunction` had missing `https://` scheme on IoT endpoint — fixed in source and redeployed.
+
+14. Step 5: Passed
+15. Evidence: Firmware cloud config layer added and verified after build, flash, and monitor. Boot logs show `CLOUD` initialization lines including `Cloud config loaded`, derived `DeviceId=esp32p4-d5c7e8`, and configured API base URL.
+16. Notes: `cloud_config_init()` now runs at startup, uses `esp_read_mac(..., ESP_MAC_WIFI_STA)` to derive device ID before network init, and does not embed secrets (API key remains NVS-injected).

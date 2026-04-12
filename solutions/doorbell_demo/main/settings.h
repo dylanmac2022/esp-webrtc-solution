@@ -64,6 +64,16 @@ extern "C" {
 
 #define WEBRTC_SUPPORT_OPUS
 
+/**
+ * @brief  Cloud API base URL (not a secret)
+ */
+#define CLOUD_API_BASE_URL  "https://wy3mcplope.execute-api.us-east-2.amazonaws.com"
+
+/**
+ * @brief  Enable cloud integration features
+ */
+#define CLOUD_ENABLED       (true)
+
 #ifdef __cplusplus
 }
 #endif
