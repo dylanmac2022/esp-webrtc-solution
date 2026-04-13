@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Doorbell Demo - Step 11</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg0: #0b1020;
+      --bg1: #111a30;
+      --panel: rgba(20, 30, 56, 0.8);
+      --line: #2a3f73;
+      --text: #e8efff;
+      --muted: #9fb1d8;
+      --ok: #4dd4a0;
+      --warn: #ffbf69;
+      --bad: #ff6f6f;
+      --accent: #49a5ff;
+      --accent2: #61e4c5;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Space Grotesk", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(900px 420px at 10% -10%, rgba(73, 165, 255, 0.22), transparent 60%),
+        radial-gradient(800px 380px at 90% -20%, rgba(97, 228, 197, 0.18), transparent 60%),
+        linear-gradient(160deg, var(--bg0), var(--bg1));
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .wrap { max-width: 1200px; margin: 0 auto; }
+    h1 { margin: 0 0 8px; font-size: 34px; letter-spacing: 0.3px; }
+    .sub { margin: 0 0 18px; color: var(--muted); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      backdrop-filter: blur(4px);
+      animation: rise 240ms ease both;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .card h2 { margin: 0 0 10px; font-size: 16px; letter-spacing: 0.3px; }
+    label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 6px; }
+    input {
+      width: 100%;
+      background: #0e1730;
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-family: inherit;
+    }
+
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    button {
+      border: 1px solid transparent;
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      background: #17264a;
+      color: var(--text);
+    }
+    button.primary { background: linear-gradient(90deg, #1f7dd8, #35a0ff); }
+    button.good { background: linear-gradient(90deg, #1b8f6e, #31b48f); }
+    button.warn { background: linear-gradient(90deg, #9a5b19, #c17a24); }
+    button.bad { background: linear-gradient(90deg, #8f2b2b, #be3e3e); }
+
+    .status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      min-height: 18px;
+      word-break: break-word;
+    }
+    .ok { color: var(--ok); }
+    .warnText { color: var(--warn); }
+    .badText { color: var(--bad); }
+
+    .events {
+      max-height: 220px;
+      overflow: auto;
+      display: grid;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .eventItem {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #101d3a;
+      padding: 8px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .media {
+      margin-top: 10px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .media img, .media video {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #0a1020;
+    }
+
+    .wide { grid-column: 1 / -1; }
+    a { color: #8cc8ff; }
+    .tiny { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Doorbell Integration Demo</h1>
+    <p class="sub">Step 11 checkpoint: live view + command controls + playback in one page.</p>
+
+    <div class="grid">
+      <section class="card wide">
+        <h2>Configuration</h2>
+        <div class="grid">
+          <div>
+            <label>API Base URL</label>
+            <input id="apiBase" value="https://wy3mcplope.execute-api.us-east-2.amazonaws.com" />
+          </div>
+          <div>
+            <label>Device API Key</label>
+            <input id="apiKey" type="password" value="doorbell-lab7-key-2026-04-02-9f7c" />
+          </div>
+          <div>
+            <label>Device ID</label>
+            <input id="deviceId" value="esp32p4-d5c7e8" />
+          </div>
+          <div>
+            <label>Room Name (from ESP monitor)</label>
+            <input id="roomName" placeholder="esp_d5c7e8_XXXX" />
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>1) Live Viewing</h2>
+        <div class="row">
+          <button class="primary" id="openLiveBtn">Open Live Page</button>
+        </div>
+        <div id="liveStatus" class="status">Uses AppRTC room page for current firmware stream.</div>
+        <div class="tiny">Current firmware signaling is AppRTC. Enter room name from monitor, then click open.</div>
+      </section>
+
+      <section class="card">
+        <h2>2) Recording Control</h2>
+        <div class="row">
+          <button class="good" id="startBtn">record_start</button>
+          <button class="bad" id="stopBtn">record_stop</button>
+        </div>
+        <div id="recordStatus" class="status"></div>
+      </section>
+
+      <section class="card">
+        <h2>3) Photo Capture Trigger</h2>
+        <div class="row">
+          <button class="warn" id="snapBtn">snapshot command</button>
+        </div>
+        <div id="snapStatus" class="status"></div>
+      </section>
+
+      <section class="card wide">
+        <h2>4) Recorded Playback + 5) Photo Preview</h2>
+        <div class="row">
+          <button class="primary" id="listBtn">Refresh Events</button>
+        </div>
+        <div id="eventsStatus" class="status"></div>
+        <div id="events" class="events"></div>
+
+        <div class="media" id="media"></div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function cfg() {
+      return {
+        base: $("apiBase").value.trim().replace(/\/$/, ""),
+        key: $("apiKey").value.trim(),
+        deviceId: $("deviceId").value.trim(),
+        room: $("roomName").value.trim(),
+      };
+    }
+
+    function setStatus(id, text, kind) {
+      const el = $(id);
+      el.textContent = text;
+      el.className = "status";
+      if (kind === "ok") el.classList.add("ok");
+      if (kind === "warn") el.classList.add("warnText");
+      if (kind === "bad") el.classList.add("badText");
+    }
+
+    async function post(path, payload) {
+      const c = cfg();
+      const r = await fetch(c.base + path, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": c.key,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        throw new Error(data.message || ("HTTP " + r.status));
+      }
+      return data;
+    }
+
+    async function get(path) {
+      const c = cfg();
+      const r = await fetch(c.base + path, {
+        headers: { "x-api-key": c.key },
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        throw new Error(data.message || ("HTTP " + r.status));
+      }
+      return data;
+    }
+
+    async function sendCommand(command, statusId) {
+      try {
+        setStatus(statusId, "Sending " + command + " ...", "warn");
+        const c = cfg();
+        const res = await post("/device/command", {
+          deviceId: c.deviceId,
+          command,
+          payload: {
+            schemaVersion: "v1",
+            source: "step11-web",
+            action: command,
+          },
+        });
+        setStatus(statusId, "Published: " + (res.topic || "(no topic)") + " corr=" + (res.correlationId || "n/a"), "ok");
+      } catch (e) {
+        setStatus(statusId, e.message, "bad");
+      }
+    }
+
+    async function listEvents() {
+      try {
+        setStatus("eventsStatus", "Loading events ...", "warn");
+        $("events").innerHTML = "";
+        $("media").innerHTML = "";
+        const c = cfg();
+        const res = await get("/events?deviceId=" + encodeURIComponent(c.deviceId) + "&limit=20");
+        const items = Array.isArray(res) ? res : (res.items || res.events || []);
+        if (!items.length) {
+          setStatus("eventsStatus", "No events yet.", "warn");
+          return;
+        }
+        setStatus("eventsStatus", "Loaded " + items.length + " events. Click one.", "ok");
+        for (const it of items) {
+          const eventId = it.eventId || it.id || "unknown";
+          const t = it.eventTs ? new Date(Number(it.eventTs)).toLocaleString() : "";
+          const div = document.createElement("div");
+          div.className = "eventItem";
+          div.textContent = eventId + (t ? (" | " + t) : "");
+          div.onclick = () => loadPlayback(eventId);
+          $("events").appendChild(div);
+        }
+      } catch (e) {
+        setStatus("eventsStatus", e.message, "bad");
+      }
+    }
+
+    async function loadPlayback(eventId) {
+      try {
+        setStatus("eventsStatus", "Loading playback for " + eventId + " ...", "warn");
+        $("media").innerHTML = "";
+        const c = cfg();
+        const res = await get("/events/" + encodeURIComponent(eventId) + "/playback?deviceId=" + encodeURIComponent(c.deviceId));
+        const snapshot = res.snapshot || res.snapshotUrl || (res.urls && res.urls.snapshot);
+        const video = res.video || res.videoUrl || (res.urls && res.urls.video);
+
+        if (!snapshot && !video) {
+          setStatus("eventsStatus", "No media URLs on this event.", "warn");
+          return;
+        }
+
+        if (snapshot) {
+          const a = document.createElement("a");
+          a.href = snapshot;
+          a.target = "_blank";
+          a.textContent = "Open snapshot URL";
+          const img = document.createElement("img");
+          img.src = snapshot;
+          img.alt = "snapshot";
+          $("media").appendChild(a);
+          $("media").appendChild(img);
+        }
+
+        if (video) {
+          const a = document.createElement("a");
+          a.href = video;
+          a.target = "_blank";
+          a.textContent = "Open video URL";
+          const v = document.createElement("video");
+          v.src = video;
+          v.controls = true;
+          $("media").appendChild(a);
+          $("media").appendChild(v);
+        }
+
+        setStatus("eventsStatus", "Playback loaded for " + eventId, "ok");
+      } catch (e) {
+        setStatus("eventsStatus", e.message, "bad");
+      }
+    }
+
+    $("openLiveBtn").addEventListener("click", () => {
+      const c = cfg();
+      if (!c.room) {
+        setStatus("liveStatus", "Enter room name from ESP monitor first.", "bad");
+        return;
+      }
+      const u = "https://webrtc.espressif.com/doorbell";
+      window.open(u, "_blank", "noopener,noreferrer");
+      setStatus("liveStatus", "Opened live page. Join room: " + c.room, "ok");
+    });
+
+    $("startBtn").addEventListener("click", () => sendCommand("record_start", "recordStatus"));
+    $("stopBtn").addEventListener("click", () => sendCommand("record_stop", "recordStatus"));
+    $("snapBtn").addEventListener("click", () => sendCommand("snapshot", "snapStatus"));
+    $("listBtn").addEventListener("click", listEvents);
+
+    listEvents();
+  </script>
+</body>
+</html>
