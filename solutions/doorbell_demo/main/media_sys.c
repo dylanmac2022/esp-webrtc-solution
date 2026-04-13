@@ -41,6 +41,7 @@ typedef struct {
     esp_capture_sink_handle_t   capture_handle; // Synchronized audio+video capture handle
     esp_capture_video_src_if_t *vid_src;        // Camera source (OV5647 via V4L2 /dev/video0)
     esp_capture_audio_src_if_t *aud_src;        // Mic source (I2S via ES8311 codec)
+    esp_capture_sink_handle_t   snapshot_sink;  // Dedicated one-shot MJPEG snapshot sink
 } capture_system_t;
 
 // player_system_t: Bundles the audio (I2S speaker) and optional video (LCD) render
@@ -171,6 +172,25 @@ static int build_capture_system(void)
         .video_src = capture_sys.vid_src,
     };
     esp_capture_open(&cfg, &capture_sys.capture_handle);
+
+    esp_capture_sink_cfg_t snapshot_sink_cfg = {
+        .video_info = {
+            .format_id = ESP_CAPTURE_FMT_ID_MJPEG,
+            .width = VIDEO_WIDTH,
+            .height = VIDEO_HEIGHT,
+            .fps = 20,
+        },
+    };
+    esp_capture_err_t ret = esp_capture_sink_setup(capture_sys.capture_handle, 1, &snapshot_sink_cfg, &capture_sys.snapshot_sink);
+    if (ret != ESP_CAPTURE_ERR_OK || !capture_sys.snapshot_sink) {
+        ESP_LOGE(TAG, "Fail to setup snapshot sink ret=%d", ret);
+        return -1;
+    }
+    ret = esp_capture_sink_enable(capture_sys.snapshot_sink, ESP_CAPTURE_RUN_MODE_ALWAYS);
+    if (ret != ESP_CAPTURE_ERR_OK) {
+        ESP_LOGE(TAG, "Fail to enable snapshot sink ret=%d", ret);
+        return -1;
+    }
     return 0;
 }
 
@@ -412,5 +432,87 @@ int stop_music()
             media_lib_thread_sleep(20);
         }
     }
+    return 0;
+}
+
+int media_sys_capture_snapshot(uint8_t **out_data, int *out_size)
+{
+    if (!out_data || !out_size || !capture_sys.capture_handle || !capture_sys.snapshot_sink) {
+        return -1;
+    }
+    *out_data = NULL;
+    *out_size = 0;
+
+    // NOTE: Do not call esp_capture_sink_enable()/esp_capture_start() here.
+    // Runtime re-enable can crash inside esp_capture path manager on sparse path ids.
+    // Snapshot must remain read-only against capture graph state.
+
+    // Drain any stale frames (including zero-size sentinel injected on path stop).
+    esp_capture_stream_frame_t stale = { .stream_type = ESP_CAPTURE_STREAM_TYPE_VIDEO };
+    while (esp_capture_sink_acquire_frame(capture_sys.snapshot_sink, &stale, true) == ESP_CAPTURE_ERR_OK) {
+        esp_capture_sink_release_frame(capture_sys.snapshot_sink, &stale);
+    }
+
+    // Acquire one frame; retry up to 1 s (20 × 50 ms) to handle queue jitter.
+    esp_capture_stream_frame_t frame = { .stream_type = ESP_CAPTURE_STREAM_TYPE_VIDEO };
+    esp_capture_err_t ret = ESP_CAPTURE_ERR_INTERNAL;
+    for (int i = 0; i < 20; i++) {
+        ret = esp_capture_sink_acquire_frame(capture_sys.snapshot_sink, &frame, true);
+        if (ret == ESP_CAPTURE_ERR_OK && frame.size > 0 && frame.data) {
+            break;
+        }
+        media_lib_thread_sleep(50);
+    }
+    if (ret != ESP_CAPTURE_ERR_OK || frame.size <= 0 || !frame.data) {
+        ESP_LOGW(TAG, "Snapshot first pass empty ret=%d size=%d data=%p", ret, frame.size, frame.data);
+
+        // Methodical recovery for path disable/empty queue:
+        // 1) Ensure capture is running, 2) force sink restart (disable->always), 3) retry.
+        esp_capture_err_t start_ret = esp_capture_start(capture_sys.capture_handle);
+        if (start_ret != ESP_CAPTURE_ERR_OK) {
+            ESP_LOGE(TAG, "Snapshot recovery start failed ret=%d", start_ret);
+            return -1;
+        }
+
+        esp_capture_err_t dis_ret = esp_capture_sink_enable(capture_sys.snapshot_sink, ESP_CAPTURE_RUN_MODE_DISABLE);
+        if (dis_ret != ESP_CAPTURE_ERR_OK) {
+            ESP_LOGW(TAG, "Snapshot recovery disable ret=%d", dis_ret);
+        }
+        media_lib_thread_sleep(20);
+
+        esp_capture_err_t en_ret = esp_capture_sink_enable(capture_sys.snapshot_sink, ESP_CAPTURE_RUN_MODE_ALWAYS);
+        if (en_ret != ESP_CAPTURE_ERR_OK) {
+            ESP_LOGE(TAG, "Snapshot recovery enable failed ret=%d", en_ret);
+            return -1;
+        }
+        media_lib_thread_sleep(300);
+
+        memset(&frame, 0, sizeof(frame));
+        frame.stream_type = ESP_CAPTURE_STREAM_TYPE_VIDEO;
+        for (int i = 0; i < 20; i++) {
+            ret = esp_capture_sink_acquire_frame(capture_sys.snapshot_sink, &frame, true);
+            if (ret == ESP_CAPTURE_ERR_OK && frame.size > 0 && frame.data) {
+                break;
+            }
+            media_lib_thread_sleep(50);
+        }
+
+        if (ret != ESP_CAPTURE_ERR_OK || frame.size <= 0 || !frame.data) {
+            ESP_LOGE(TAG, "Fail to acquire snapshot frame after recovery ret=%d size=%d data=%p", ret, frame.size, frame.data);
+            return -1;
+        }
+    }
+
+    uint8_t *buf = malloc(frame.size);
+    if (!buf) {
+        esp_capture_sink_release_frame(capture_sys.snapshot_sink, &frame);
+        ESP_LOGE(TAG, "No memory for snapshot copy size=%d", frame.size);
+        return -1;
+    }
+    memcpy(buf, frame.data, frame.size);
+    esp_capture_sink_release_frame(capture_sys.snapshot_sink, &frame);
+
+    *out_data = buf;
+    *out_size = frame.size;
     return 0;
 }

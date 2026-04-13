@@ -68,6 +68,18 @@ int play_music(const uint8_t *data, int size, int duration);
  */
 int stop_music(void);
 
+/**
+ * @brief  Capture a one-shot JPEG snapshot from camera
+ *
+ * @param[out] out_data  Heap buffer containing JPEG bytes (caller frees)
+ * @param[out] out_size  JPEG buffer size in bytes
+ *
+ * @return
+ *      - 0       On success
+ *      - Others  Fail to capture snapshot
+ */
+int media_sys_capture_snapshot(uint8_t **out_data, int *out_size);
+
 #ifdef __cplusplus
 }
 #endif

@@ -77,7 +77,7 @@ extern "C" {
 /**
  * @brief  Device API key placeholder (provision from NVS; do not commit real key)
  */
-#define CLOUD_DEVICE_API_KEY ""
+#define CLOUD_DEVICE_API_KEY "doorbell-lab7-key-2026-04-02-9f7c"
 
 #ifdef __cplusplus
 }

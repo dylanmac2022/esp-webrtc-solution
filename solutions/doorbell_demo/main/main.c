@@ -45,6 +45,8 @@ static char cloud_room_name[64];
 static char cloud_ws_url[128];
 static int cloud_expires_in_sec = 0;
 
+static void cloud_get_device_id(char *out, size_t out_size);
+
 typedef struct {
     char *buf;
     int cap;
@@ -115,6 +117,189 @@ static int leave_room(int argc, char **argv)
 static int cmd_cli(int argc, char **argv)
 {
     send_cmd(argc > 1 ? argv[1] : "ring");
+    return 0;
+}
+
+static bool cloud_request_snapshot_upload_url(const char *device_id, const char *event_id,
+                                              char *upload_url, size_t upload_url_size,
+                                              char *key, size_t key_size)
+{
+    char url[196];
+    snprintf(url, sizeof(url), "%s/media/upload-url", CLOUD_API_BASE_URL);
+
+    char session_id[40];
+    snprintf(session_id, sizeof(session_id), "sess-%lld", (long long)(esp_timer_get_time() / 1000));
+
+    char body[320];
+    snprintf(body, sizeof(body),
+             "{\"deviceId\":\"%s\",\"eventId\":\"%s\",\"mediaType\":\"snapshot\",\"contentType\":\"image/jpeg\",\"sessionId\":\"%s\"}",
+             device_id, event_id, session_id);
+
+    size_t resp_cap = 8192;
+    char *resp = (char *)calloc(resp_cap, 1);
+    if (!resp) {
+        ESP_LOGE(CLOUD_TAG, "Out of memory allocating upload-url response buffer");
+        return false;
+    }
+    cloud_http_resp_t resp_ctx = {
+        .buf = resp,
+        .cap = (int)resp_cap,
+        .len = 0,
+    };
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 10000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .event_handler = cloud_http_event_handler,
+        .user_data = &resp_ctx,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        free(resp);
+        return false;
+    }
+
+    esp_http_client_set_header(client, "content-type", "application/json");
+    esp_http_client_set_header(client, "x-api-key", CLOUD_DEVICE_API_KEY);
+    esp_http_client_set_post_field(client, body, strlen(body));
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    int read_len = resp_ctx.len;
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK || status != 200) {
+        ESP_LOGE(CLOUD_TAG, "Upload-url request failed err=%s http=%d", esp_err_to_name(err), status);
+        free(resp);
+        return false;
+    }
+
+    cJSON *root = cJSON_ParseWithLength(resp, read_len);
+    if (!root) {
+        ESP_LOGE(CLOUD_TAG, "Upload-url JSON parse failed read=%d", read_len);
+        free(resp);
+        return false;
+    }
+    cJSON *upload_url_json = cJSON_GetObjectItem(root, "uploadUrl");
+    cJSON *key_json = cJSON_GetObjectItem(root, "key");
+    if (!cJSON_IsString(upload_url_json) || !cJSON_IsString(key_json)) {
+        cJSON_Delete(root);
+        free(resp);
+        ESP_LOGE(CLOUD_TAG, "Upload-url response missing uploadUrl/key");
+        return false;
+    }
+
+    int url_need = snprintf(upload_url, upload_url_size, "%s", upload_url_json->valuestring);
+    int key_need = snprintf(key, key_size, "%s", key_json->valuestring);
+    if (url_need < 0 || (size_t)url_need >= upload_url_size) {
+        cJSON_Delete(root);
+        free(resp);
+        ESP_LOGE(CLOUD_TAG, "Upload URL truncated need=%d cap=%u", url_need, (unsigned)upload_url_size);
+        return false;
+    }
+    if (key_need < 0 || (size_t)key_need >= key_size) {
+        cJSON_Delete(root);
+        free(resp);
+        ESP_LOGE(CLOUD_TAG, "S3 key truncated need=%d cap=%u", key_need, (unsigned)key_size);
+        return false;
+    }
+    cJSON_Delete(root);
+    free(resp);
+    return true;
+}
+
+static bool cloud_upload_snapshot_bytes(const char *upload_url, const uint8_t *data, int size)
+{
+    char resp_buf[512] = {0};
+    cloud_http_resp_t resp = {
+        .buf = resp_buf,
+        .cap = sizeof(resp_buf),
+        .len = 0,
+    };
+
+    esp_http_client_config_t cfg = {
+        .url = upload_url,
+        .method = HTTP_METHOD_PUT,
+        .timeout_ms = 20000,
+        .buffer_size = 8192,
+        .buffer_size_tx = 8192,
+        .event_handler = cloud_http_event_handler,
+        .user_data = &resp,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        return false;
+    }
+
+    esp_http_client_set_header(client, "content-type", "image/jpeg");
+
+    // Keep upload path in perform() mode so HTTP client sets request framing reliably.
+    esp_http_client_set_post_field(client, (const char *)data, size);
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(CLOUD_TAG, "Snapshot upload failed: %s", esp_err_to_name(err));
+        if (resp.len > 0) {
+            ESP_LOGE(CLOUD_TAG, "Upload error body: %s", resp.buf);
+        }
+        return false;
+    }
+    if (!(status == 200 || status == 204)) {
+        ESP_LOGE(CLOUD_TAG, "Snapshot upload HTTP %d", status);
+        if (resp.len > 0) {
+            ESP_LOGE(CLOUD_TAG, "Upload error body: %s", resp.buf);
+        }
+        return false;
+    }
+    ESP_LOGI(CLOUD_TAG, "Snapshot upload success http=%d", status);
+    return true;
+}
+
+static int snapshot_cli(int argc, char **argv)
+{
+    RUN_ASYNC(snapshot, {
+        uint8_t *jpg = NULL;
+        do {
+            if (!CLOUD_ENABLED) {
+                ESP_LOGW(CLOUD_TAG, "Cloud disabled, snapshot upload skipped");
+                break;
+            }
+            if (CLOUD_DEVICE_API_KEY[0] == '\0') {
+                ESP_LOGW(CLOUD_TAG, "Device API key not provisioned, snapshot upload skipped");
+                break;
+            }
+
+            char device_id[24];
+            cloud_get_device_id(device_id, sizeof(device_id));
+            char event_id[40];
+            snprintf(event_id, sizeof(event_id), "evt-%lld", (long long)(esp_timer_get_time() / 1000));
+
+            int jpg_size = 0;
+            if (media_sys_capture_snapshot(&jpg, &jpg_size) != 0 || jpg == NULL || jpg_size <= 0) {
+                ESP_LOGE(CLOUD_TAG, "Snapshot capture failed");
+                break;
+            }
+
+            ESP_LOGI(CLOUD_TAG, "Requesting upload URL for eventId=%s", event_id);
+            char upload_url[4096];
+            char s3_key[256];
+            if (!cloud_request_snapshot_upload_url(device_id, event_id, upload_url, sizeof(upload_url), s3_key, sizeof(s3_key))) {
+                break;
+            }
+            ESP_LOGI(CLOUD_TAG, "Upload URL received key=%s", s3_key);
+
+            cloud_upload_snapshot_bytes(upload_url, jpg, jpg_size);
+        } while (0);
+
+        if (jpg) {
+            free(jpg);
+        }
+    });
     return 0;
 }
 
@@ -235,6 +420,11 @@ static int init_console()
             .func = cmd_cli,
         },
         {
+            .command = "snapshot",
+            .help = "Capture and upload one snapshot\n",
+            .func = snapshot_cli,
+        },
+        {
             .command = "i",
             .help = "Show system status\r\n",
             .func = sys_cli,
@@ -315,6 +505,9 @@ static void thread_scheduler(const char *thread_name, media_lib_thread_cfg_t *sc
         schedule_cfg->stack_size = 25 * 1024;
         schedule_cfg->priority = 18;
         schedule_cfg->core_id = 1;
+    } else if (strcmp(thread_name, "snapshot") == 0) {
+        schedule_cfg->stack_size = 20 * 1024;
+        schedule_cfg->priority = 12;
     }
     if (strcmp(thread_name, "start") == 0) {
         schedule_cfg->stack_size = 6 * 1024; // Signaling startup task - small stack is fine
