@@ -341,6 +341,79 @@ static bool cloud_create_snapshot_event(const char *device_id, const char *event
     return created || duplicate;
 }
 
+static bool cloud_get_snapshot_playback_link(const char *device_id, const char *event_id,
+                                             char *snapshot_link, size_t snapshot_link_size)
+{
+    char url[320];
+    snprintf(url, sizeof(url), "%s/events/%s/playback?deviceId=%s", CLOUD_API_BASE_URL, event_id, device_id);
+
+    size_t resp_cap = 8192;
+    char *resp = (char *)calloc(resp_cap, 1);
+    if (!resp) {
+        ESP_LOGE(CLOUD_TAG, "Out of memory allocating playback response buffer");
+        return false;
+    }
+    cloud_http_resp_t resp_ctx = {
+        .buf = resp,
+        .cap = (int)resp_cap,
+        .len = 0,
+    };
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_GET,
+        .timeout_ms = 10000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .event_handler = cloud_http_event_handler,
+        .user_data = &resp_ctx,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        free(resp);
+        return false;
+    }
+
+    esp_http_client_set_header(client, "x-api-key", CLOUD_DEVICE_API_KEY);
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    int read_len = resp_ctx.len;
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK || status != 200) {
+        ESP_LOGE(CLOUD_TAG, "Playback request failed err=%s http=%d", esp_err_to_name(err), status);
+        if (read_len > 0) {
+            ESP_LOGE(CLOUD_TAG, "Playback error body: %s", resp);
+        }
+        free(resp);
+        return false;
+    }
+
+    cJSON *root = cJSON_ParseWithLength(resp, read_len);
+    if (!root) {
+        ESP_LOGE(CLOUD_TAG, "Playback JSON parse failed read=%d", read_len);
+        free(resp);
+        return false;
+    }
+
+    cJSON *links_json = cJSON_GetObjectItem(root, "links");
+    cJSON *snapshot_json = links_json ? cJSON_GetObjectItem(links_json, "snapshot") : NULL;
+    if (!cJSON_IsString(snapshot_json) || snapshot_json->valuestring == NULL || snapshot_json->valuestring[0] == '\0') {
+        ESP_LOGE(CLOUD_TAG, "Playback response missing links.snapshot");
+        cJSON_Delete(root);
+        free(resp);
+        return false;
+    }
+
+    int need = snprintf(snapshot_link, snapshot_link_size, "%s", snapshot_json->valuestring);
+    cJSON_Delete(root);
+    free(resp);
+    if (need < 0 || (size_t)need >= snapshot_link_size) {
+        ESP_LOGE(CLOUD_TAG, "Playback snapshot link truncated need=%d cap=%u", need, (unsigned)snapshot_link_size);
+        return false;
+    }
+    return true;
+}
+
 static int snapshot_cli(int argc, char **argv)
 {
     RUN_ASYNC(snapshot, {
@@ -380,7 +453,25 @@ static int snapshot_cli(int argc, char **argv)
             }
 
             ESP_LOGI(CLOUD_TAG, "Creating event metadata eventId=%s", event_id);
-            cloud_create_snapshot_event(device_id, event_id, event_ts_ms, s3_key);
+            if (!cloud_create_snapshot_event(device_id, event_id, event_ts_ms, s3_key)) {
+                break;
+            }
+
+            char snapshot_link[4096];
+            bool playback_ok = false;
+            for (int i = 0; i < 3; i++) {
+                if (cloud_get_snapshot_playback_link(device_id, event_id, snapshot_link, sizeof(snapshot_link))) {
+                    playback_ok = true;
+                    break;
+                }
+                media_lib_thread_sleep(1200);
+            }
+            if (playback_ok) {
+                ESP_LOGI(CLOUD_TAG, "Playback links ready eventId=%s", event_id);
+                ESP_LOGI(CLOUD_TAG, "snapshot=%s", snapshot_link);
+            } else {
+                ESP_LOGE(CLOUD_TAG, "Playback lookup failed eventId=%s", event_id);
+            }
         } while (0);
 
         if (jpg) {
