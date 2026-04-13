@@ -121,6 +121,88 @@ static int cmd_cli(int argc, char **argv)
     return 0;
 }
 
+static bool cloud_publish_device_command(const char *device_id, const char *command)
+{
+    char url[196];
+    snprintf(url, sizeof(url), "%s/device/command", CLOUD_API_BASE_URL);
+
+    char body[320];
+    snprintf(body, sizeof(body),
+             "{\"deviceId\":\"%s\",\"command\":\"%s\",\"payload\":{\"schemaVersion\":\"v1\",\"source\":\"esp-cli\",\"action\":\"%s\"}}",
+             device_id, command, command);
+
+    char resp_buf[512] = {0};
+    cloud_http_resp_t resp_ctx = {
+        .buf = resp_buf,
+        .cap = sizeof(resp_buf),
+        .len = 0,
+    };
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 10000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .event_handler = cloud_http_event_handler,
+        .user_data = &resp_ctx,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        return false;
+    }
+
+    esp_http_client_set_header(client, "content-type", "application/json");
+    esp_http_client_set_header(client, "x-api-key", CLOUD_DEVICE_API_KEY);
+    esp_http_client_set_post_field(client, body, strlen(body));
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK || status != 200) {
+        ESP_LOGE(CLOUD_TAG, "Device command publish failed cmd=%s err=%s http=%d", command, esp_err_to_name(err), status);
+        if (resp_ctx.len > 0) {
+            ESP_LOGE(CLOUD_TAG, "Device command error body: %s", resp_buf);
+        }
+        return false;
+    }
+
+    ESP_LOGI(CLOUD_TAG, "Device command published cmd=%s", command);
+    return true;
+}
+
+static int record_cli(int argc, char **argv)
+{
+    if (argc < 2) {
+        ESP_LOGW(CLOUD_TAG, "Usage: record start|stop");
+        return -1;
+    }
+
+    const char *cmd = NULL;
+    if (strcmp(argv[1], "start") == 0) {
+        cmd = "record_start";
+    } else if (strcmp(argv[1], "stop") == 0) {
+        cmd = "record_stop";
+    } else {
+        ESP_LOGW(CLOUD_TAG, "Usage: record start|stop");
+        return -1;
+    }
+
+    if (!CLOUD_ENABLED) {
+        ESP_LOGW(CLOUD_TAG, "Cloud disabled, record command skipped");
+        return 0;
+    }
+    if (CLOUD_DEVICE_API_KEY[0] == '\0') {
+        ESP_LOGW(CLOUD_TAG, "Device API key not provisioned, record command skipped");
+        return 0;
+    }
+
+    char device_id[24];
+    cloud_get_device_id(device_id, sizeof(device_id));
+    cloud_publish_device_command(device_id, cmd);
+    return 0;
+}
+
 static bool cloud_request_snapshot_upload_url(const char *device_id, const char *event_id,
                                               char *upload_url, size_t upload_url_size,
                                               char *key, size_t key_size)
@@ -601,6 +683,11 @@ static int init_console()
             .command = "snapshot",
             .help = "Capture and upload one snapshot\n",
             .func = snapshot_cli,
+        },
+        {
+            .command = "record",
+            .help = "Publish recording command: record start|stop\n",
+            .func = record_cli,
         },
         {
             .command = "i",

@@ -16,6 +16,7 @@
 #include "esp_peer_default.h"
 
 #define TAG "DOOR_BELL"
+static const char *CLOUD_TAG = "CLOUD";
 
 // Custom command strings exchanged over the AppRTC signaling data channel.
 // These are plain-text commands sent peer-to-peer (not over RTP) to control
@@ -25,6 +26,8 @@
 #define DOOR_BELL_RING_CMD          "RING"          // ESP32 -> Browser: doorbell button pressed
 #define DOOR_BELL_CALL_ACCEPTED_CMD "ACCEPT_CALL"  // Browser -> ESP32: user accepted video call
 #define DOOR_BELL_CALL_DENIED_CMD   "DENY_CALL"    // Browser -> ESP32: user rejected the call
+#define DOOR_BELL_RECORD_START_CMD  "RECORD_START" // Browser/Cloud -> ESP32: start recording workflow
+#define DOOR_BELL_RECORD_STOP_CMD   "RECORD_STOP"  // Browser/Cloud -> ESP32: stop recording workflow
 
 #define SAME_STR(a, b) (strncmp(a, b, sizeof(b) - 1) == 0)
 #define SEND_CMD(webrtc, cmd) \
@@ -121,6 +124,10 @@ static int door_bell_on_cmd(esp_webrtc_custom_data_via_t via, uint8_t *data, int
         // then resets state to NONE so the doorbell is ready for the next ring.
         esp_webrtc_enable_peer_connection(webrtc, false);
         door_bell_change_state(DOOR_BELL_STATE_NONE);
+    } else if (SAME_STR(cmd, DOOR_BELL_RECORD_START_CMD) || SAME_STR(cmd, "record_start")) {
+        ESP_LOGI(CLOUD_TAG, "Recording START command received");
+    } else if (SAME_STR(cmd, DOOR_BELL_RECORD_STOP_CMD) || SAME_STR(cmd, "record_stop")) {
+        ESP_LOGI(CLOUD_TAG, "Recording STOP command received");
     }
     return 0;
 }
