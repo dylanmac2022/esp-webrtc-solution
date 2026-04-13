@@ -159,6 +159,10 @@
             <input id="roomName" placeholder="esp_d5c7e8_XXXX" />
           </div>
         </div>
+        <div class="row">
+          <button class="primary" id="testApiBtn">Test API Connection</button>
+        </div>
+        <div id="configStatus" class="status"></div>
       </section>
 
       <section class="card">
@@ -212,6 +216,31 @@
       };
     }
 
+    function validateConfig() {
+      const c = cfg();
+      if (!c.base.startsWith("https://")) {
+        throw new Error("API Base URL must start with https://");
+      }
+      if (!c.base.includes("execute-api") || !c.base.includes("amazonaws.com")) {
+        throw new Error("API Base URL looks incomplete. Use full API Gateway domain ending in amazonaws.com");
+      }
+      if (!c.key) {
+        throw new Error("Device API Key is required");
+      }
+      if (!c.deviceId) {
+        throw new Error("Device ID is required");
+      }
+      return c;
+    }
+
+    function formatFetchError(err, requestUrl) {
+      if (err && err.message === "Failed to fetch") {
+        return "Network/CORS failure calling " + requestUrl +
+          " | Check API URL, key, and try opening this page via http://localhost (not file://).";
+      }
+      return err && err.message ? err.message : "Unknown error";
+    }
+
     function setStatus(id, text, kind) {
       const el = $(id);
       el.textContent = text;
@@ -222,32 +251,56 @@
     }
 
     async function post(path, payload) {
-      const c = cfg();
-      const r = await fetch(c.base + path, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": c.key,
-        },
-        body: JSON.stringify(payload),
-      });
+      const c = validateConfig();
+      const requestUrl = c.base + path;
+      let r;
+      try {
+        r = await fetch(requestUrl, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-api-key": c.key,
+          },
+          body: JSON.stringify(payload),
+        });
+      } catch (err) {
+        throw new Error(formatFetchError(err, requestUrl));
+      }
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        throw new Error(data.message || ("HTTP " + r.status));
+        throw new Error((data.message || ("HTTP " + r.status)) + " @ " + requestUrl);
       }
       return data;
     }
 
     async function get(path) {
-      const c = cfg();
-      const r = await fetch(c.base + path, {
-        headers: { "x-api-key": c.key },
-      });
+      const c = validateConfig();
+      const requestUrl = c.base + path;
+      let r;
+      try {
+        r = await fetch(requestUrl, {
+          headers: { "x-api-key": c.key },
+        });
+      } catch (err) {
+        throw new Error(formatFetchError(err, requestUrl));
+      }
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        throw new Error(data.message || ("HTTP " + r.status));
+        throw new Error((data.message || ("HTTP " + r.status)) + " @ " + requestUrl);
       }
       return data;
+    }
+
+    async function testApiConnection() {
+      try {
+        setStatus("configStatus", "Testing API connection...", "warn");
+        const c = validateConfig();
+        const probe = await get("/events?deviceId=" + encodeURIComponent(c.deviceId) + "&limit=1");
+        const n = Array.isArray(probe) ? probe.length : ((probe.events || probe.items || []).length);
+        setStatus("configStatus", "API OK. Events endpoint reachable (items=" + n + ")", "ok");
+      } catch (e) {
+        setStatus("configStatus", e.message, "bad");
+      }
     }
 
     async function sendCommand(command, statusId) {
@@ -355,6 +408,7 @@
     $("stopBtn").addEventListener("click", () => sendCommand("record_stop", "recordStatus"));
     $("snapBtn").addEventListener("click", () => sendCommand("snapshot", "snapStatus"));
     $("listBtn").addEventListener("click", listEvents);
+    $("testApiBtn").addEventListener("click", testApiConnection);
 
     listEvents();
   </script>
