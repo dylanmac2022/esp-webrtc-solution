@@ -17,6 +17,7 @@
 #include <esp_crt_bundle.h>
 #include <nvs_flash.h>
 #include <sys/param.h>
+#include <time.h>
 #include <stdlib.h>
 #include <cJSON.h>
 #include "argtable3/argtable3.h"
@@ -260,6 +261,86 @@ static bool cloud_upload_snapshot_bytes(const char *upload_url, const uint8_t *d
     return true;
 }
 
+static bool cloud_create_snapshot_event(const char *device_id, const char *event_id,
+                                        int64_t event_ts_ms, const char *s3_key)
+{
+    char url[196];
+    snprintf(url, sizeof(url), "%s/events", CLOUD_API_BASE_URL);
+
+    char body[640];
+    snprintf(body, sizeof(body),
+             "{\"deviceId\":\"%s\",\"eventTs\":%lld,\"eventId\":\"%s\",\"eventType\":\"doorbell\",\"s3Keys\":{\"snapshot\":\"%s\"},\"uploadStatus\":\"uploaded\",\"durationSec\":0}",
+             device_id, (long long)event_ts_ms, event_id, s3_key);
+
+    size_t resp_cap = 2048;
+    char *resp = (char *)calloc(resp_cap, 1);
+    if (!resp) {
+        ESP_LOGE(CLOUD_TAG, "Out of memory allocating events response buffer");
+        return false;
+    }
+    cloud_http_resp_t resp_ctx = {
+        .buf = resp,
+        .cap = (int)resp_cap,
+        .len = 0,
+    };
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 10000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .event_handler = cloud_http_event_handler,
+        .user_data = &resp_ctx,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        free(resp);
+        return false;
+    }
+
+    esp_http_client_set_header(client, "content-type", "application/json");
+    esp_http_client_set_header(client, "x-api-key", CLOUD_DEVICE_API_KEY);
+    esp_http_client_set_post_field(client, body, strlen(body));
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    int read_len = resp_ctx.len;
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK || status != 200) {
+        ESP_LOGE(CLOUD_TAG, "Create event request failed err=%s http=%d", esp_err_to_name(err), status);
+        if (read_len > 0) {
+            ESP_LOGE(CLOUD_TAG, "Create event error body: %s", resp);
+        }
+        free(resp);
+        return false;
+    }
+
+    cJSON *root = cJSON_ParseWithLength(resp, read_len);
+    if (!root) {
+        ESP_LOGE(CLOUD_TAG, "Create event JSON parse failed read=%d", read_len);
+        free(resp);
+        return false;
+    }
+
+    cJSON *created_json = cJSON_GetObjectItem(root, "created");
+    cJSON *duplicate_json = cJSON_GetObjectItem(root, "duplicate");
+    bool created = cJSON_IsBool(created_json) ? cJSON_IsTrue(created_json) : false;
+    bool duplicate = cJSON_IsBool(duplicate_json) ? cJSON_IsTrue(duplicate_json) : false;
+
+    if (created) {
+        ESP_LOGI(CLOUD_TAG, "Event create result created=true");
+    } else if (duplicate) {
+        ESP_LOGI(CLOUD_TAG, "Event create result duplicate=true");
+    } else {
+        ESP_LOGW(CLOUD_TAG, "Event create response missing created/duplicate: %s", resp);
+    }
+
+    cJSON_Delete(root);
+    free(resp);
+    return created || duplicate;
+}
+
 static int snapshot_cli(int argc, char **argv)
 {
     RUN_ASYNC(snapshot, {
@@ -278,6 +359,7 @@ static int snapshot_cli(int argc, char **argv)
             cloud_get_device_id(device_id, sizeof(device_id));
             char event_id[40];
             snprintf(event_id, sizeof(event_id), "evt-%lld", (long long)(esp_timer_get_time() / 1000));
+            int64_t event_ts_ms = (int64_t)time(NULL) * 1000;
 
             int jpg_size = 0;
             if (media_sys_capture_snapshot(&jpg, &jpg_size) != 0 || jpg == NULL || jpg_size <= 0) {
@@ -293,7 +375,12 @@ static int snapshot_cli(int argc, char **argv)
             }
             ESP_LOGI(CLOUD_TAG, "Upload URL received key=%s", s3_key);
 
-            cloud_upload_snapshot_bytes(upload_url, jpg, jpg_size);
+            if (!cloud_upload_snapshot_bytes(upload_url, jpg, jpg_size)) {
+                break;
+            }
+
+            ESP_LOGI(CLOUD_TAG, "Creating event metadata eventId=%s", event_id);
+            cloud_create_snapshot_event(device_id, event_id, event_ts_ms, s3_key);
         } while (0);
 
         if (jpg) {
