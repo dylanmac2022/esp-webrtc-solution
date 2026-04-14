@@ -41,6 +41,7 @@ static struct {
 } room_args;
 
 static char room_url[192];
+static char whip_url[192];
 static char cloud_token[1800];
 static char cloud_room_name[64];
 static char cloud_ws_url[128];
@@ -105,7 +106,7 @@ static int join_room(int argc, char **argv)
     const char *room_id = room_args.room_id->sval[0];
     snprintf(room_url, sizeof(room_url), "%s/join/%s", server_url, room_id);
     ESP_LOGI(TAG, "Start to join in room %s", room_id);
-    start_webrtc(room_url);
+    start_webrtc(room_url, NULL, false);
     return 0;
 }
 
@@ -898,6 +899,7 @@ static bool cloud_fetch_livekit_token(const char *device_id, const char *room_na
     cJSON *token = cJSON_GetObjectItem(root, "token");
     cJSON *json_room = cJSON_GetObjectItem(root, "roomName");
     cJSON *ws_url = cJSON_GetObjectItem(root, "wsUrl");
+    cJSON *whip_url_json = cJSON_GetObjectItem(root, "whipUrl");
     cJSON *expires = cJSON_GetObjectItem(root, "expiresInSec");
     if (!cJSON_IsString(token) || !cJSON_IsString(json_room) || !cJSON_IsString(ws_url)) {
         cJSON_Delete(root);
@@ -908,12 +910,20 @@ static bool cloud_fetch_livekit_token(const char *device_id, const char *room_na
     snprintf(cloud_token, sizeof(cloud_token), "%s", token->valuestring);
     snprintf(cloud_room_name, sizeof(cloud_room_name), "%s", json_room->valuestring);
     snprintf(cloud_ws_url, sizeof(cloud_ws_url), "%s", ws_url->valuestring);
+    if (cJSON_IsString(whip_url_json)) {
+        snprintf(whip_url, sizeof(whip_url), "%s", whip_url_json->valuestring);
+    } else {
+        whip_url[0] = 0;
+    }
     cloud_expires_in_sec = cJSON_IsNumber(expires) ? expires->valueint : 0;
     cJSON_Delete(root);
     free(resp);
 
     ESP_LOGI(CLOUD_TAG, "Token received, expiresInSec=%d", cloud_expires_in_sec);
     ESP_LOGI(CLOUD_TAG, "wsUrl=%s", cloud_ws_url);
+    if (whip_url[0]) {
+        ESP_LOGI(CLOUD_TAG, "whipUrl=%s", whip_url);
+    }
     return true;
 }
 
@@ -951,21 +961,31 @@ static int network_event_handler(bool connected)
                 ESP_LOGI(CLOUD_TAG, "Requesting LiveKit token for room %s", room);
                 bool token_ok = cloud_fetch_livekit_token(device_id, room);
                 if (token_ok) {
-                    snprintf(room_url, sizeof(room_url), "%s/join/%s", server_url, cloud_room_name);
-                    ESP_LOGW(CLOUD_TAG, "LiveKit token fetched; AppRTC signaling remains active for this step");
+                    if (whip_url[0]) {
+                        ESP_LOGI(CLOUD_TAG, "Start WHIP publish to LiveKit room %s", cloud_room_name);
+                        ret = start_webrtc(whip_url, cloud_token, true);
+                    } else {
+                        ESP_LOGW(CLOUD_TAG, "Backend did not return whipUrl, fallback to AppRTC");
+                        snprintf(room_url, sizeof(room_url), "%s/join/%s", server_url, cloud_room_name);
+                        ret = start_webrtc(room_url, NULL, false);
+                    }
                 } else {
                     snprintf(room_url, sizeof(room_url), "%s/join/%s", server_url, room);
+                    ESP_LOGI(TAG, "Start to join in room %s", room);
+                    ret = start_webrtc(room_url, NULL, false);
                 }
-                ESP_LOGI(TAG, "Start to join in room %s", token_ok ? cloud_room_name : room);
-                ret = start_webrtc(room_url);
                 if (ret == 0) {
                     break; // Room joined successfully
                 }
             }
             if (ret == 0) {
-                // Print the room name and browser URL for the user.
-                // Open https://webrtc.espressif.com/doorbell in Chrome and enter this room name.
-                ESP_LOGW(TAG, "Please use browser to join in %s on %s/doorbell", room, server_url);
+                if (whip_url[0]) {
+                    ESP_LOGW(TAG, "LiveKit WHIP publish active at %s", whip_url);
+                } else {
+                    // Print the room name and browser URL for the user.
+                    // Open https://webrtc.espressif.com/doorbell in Chrome and enter this room name.
+                    ESP_LOGW(TAG, "Please use browser to join in %s on %s/doorbell", room, server_url);
+                }
             } else {
                 ESP_LOGE(TAG, "Failed to start webrtc after retries, check network/signaling");
             }

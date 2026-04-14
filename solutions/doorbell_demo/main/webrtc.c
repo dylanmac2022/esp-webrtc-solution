@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_webrtc_defaults.h"
 #include "esp_peer_default.h"
+#include "esp_peer_whip_signaling.h"
 
 #define TAG "DOOR_BELL"
 static const char *CLOUD_TAG = "CLOUD";
@@ -194,7 +195,7 @@ static void key_monitor_thread(void *arg)
     media_lib_thread_destroy(NULL);
 }
 
-int start_webrtc(char *url)
+int start_webrtc(char *url, char *auth_token, bool use_whip)
 {
     if (network_is_connected() == false) {
         ESP_LOGE(TAG, "Wifi not connected yet");
@@ -214,6 +215,10 @@ int start_webrtc(char *url)
 
     esp_peer_default_cfg_t peer_cfg = {
         .agent_recv_timeout = 500,
+    };
+    esp_peer_signaling_whip_cfg_t whip_cfg = {
+        .auth_type = ESP_PEER_SIGNALING_WHIP_AUTH_TYPE_BEARER,
+        .token = auth_token,
     };
     // Step 10: Define what media this device offers to browser peer.
     // The SDP offer sent during WebRTC negotiation is built from this config:
@@ -239,7 +244,7 @@ int start_webrtc(char *url)
                 .height = VIDEO_HEIGHT,              // Defined in settings.h (e.g. 720)
                 .fps = VIDEO_FPS,                    // Defined in settings.h (e.g. 15)
             },
-            .audio_dir = ESP_PEER_MEDIA_DIR_SEND_RECV, // Full duplex audio (door intercom)
+            .audio_dir = use_whip ? ESP_PEER_MEDIA_DIR_SEND_ONLY : ESP_PEER_MEDIA_DIR_SEND_RECV,
             .video_dir = ESP_PEER_MEDIA_DIR_SEND_ONLY, // One-way video: camera -> browser only
             .on_custom_data = door_bell_on_cmd,         // Command handler for RING/ACCEPT/DENY
             .enable_data_channel = DATA_CHANNEL_ENABLED,
@@ -248,13 +253,12 @@ int start_webrtc(char *url)
             .extra_size = sizeof(peer_cfg),
         },
         .signaling_cfg = {
-            // Step 11: Point signaling to the selected room URL.
-            // Format: https://webrtc.espressif.com/join/esp_XXYYZZ_NNNN
-            // AppRTC uses this URL to match the ESP32 with a waiting browser peer.
             .signal_url = url,
+            .extra_cfg = use_whip ? &whip_cfg : NULL,
+            .extra_size = use_whip ? sizeof(whip_cfg) : 0,
         },
         .peer_impl = esp_peer_get_default_impl(),           // Default ICE/DTLS peer implementation
-        .signaling_impl = esp_signaling_get_apprtc_impl(),  // AppRTC-compatible signaling
+        .signaling_impl = use_whip ? esp_signaling_get_whip_impl() : esp_signaling_get_apprtc_impl(),
     };
     int ret = esp_webrtc_open(&cfg, &webrtc);
     if (ret != 0) {
@@ -272,10 +276,17 @@ int start_webrtc(char *url)
     // Set event handler
     esp_webrtc_set_event_handler(webrtc, webrtc_event_handler, NULL);
 
-    // Keep peer transport disabled until ACCEPT_CALL command is received.
-    // This prevents ICE candidates and DTLS from being exchanged with the browser
-    // until the user explicitly presses Accept on the browser UI.
-    esp_webrtc_enable_peer_connection(webrtc, false);
+    if (use_whip) {
+        // WHIP has no ACCEPT_CALL control channel in this flow, so connect immediately.
+        esp_webrtc_enable_peer_connection(webrtc, true);
+        ESP_LOGI(TAG, "Using WHIP signaling for LiveKit publish");
+    } else {
+        // Keep peer transport disabled until ACCEPT_CALL command is received.
+        // This prevents ICE candidates and DTLS from being exchanged with the browser
+        // until the user explicitly presses Accept on the browser UI.
+        esp_webrtc_enable_peer_connection(webrtc, false);
+        ESP_LOGI(TAG, "Using AppRTC signaling");
+    }
 
     // Step 12b: Start signaling; SDP/ICE/DTLS will run after peer is enabled.
     // esp_webrtc_start() connects to the AppRTC room and waits for a browser peer.

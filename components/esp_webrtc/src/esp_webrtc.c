@@ -711,16 +711,128 @@ static int signal_new_msg(esp_peer_signaling_msg_t *msg, void *ctx)
             }
             return 0;
         }
+
+        // Some browsers send textual mids (e.g. "audio", "video") and bundle groups.
+        // The lower-layer peer SDP parser expects numeric mids and can return 255
+        // if parsing fails, which prevents video RTP from being mapped/sent.
+        // Normalize both `a=mid:*` and `a=group:BUNDLE ...` to numeric indexes.
+        bool sdp_mid_patched = false;
+        bool sdp_bundle_patched = false;
+        char *patched_sdp = NULL;
+        if (msg->type == ESP_PEER_SIGNALING_MSG_SDP && msg->data && msg->size > 0) {
+            const char *src = (const char *)msg->data;
+            int src_size = msg->size;
+
+            int total_mlines = 0;
+            for (int p = 0; p < src_size && src[p] != 0; ) {
+                int start = p;
+                while (p < src_size && src[p] != '\n' && src[p] != 0) {
+                    p++;
+                }
+                int len = p - start;
+                if (len >= 2 && src[start] == 'm' && src[start + 1] == '=') {
+                    total_mlines++;
+                }
+                if (p < src_size && src[p] == '\n') {
+                    p++;
+                }
+            }
+
+            int out_cap = src_size + 128;
+            patched_sdp = (char *)calloc(1, out_cap);
+            if (patched_sdp) {
+                int out = 0;
+                int mline_idx = -1;
+                int i = 0;
+                while (i < src_size && src[i] != 0) {
+                    int line_start = i;
+                    while (i < src_size && src[i] != '\n' && src[i] != 0) {
+                        i++;
+                    }
+                    int line_len = i - line_start;
+                    bool has_lf = (i < src_size && src[i] == '\n');
+                    bool has_cr = (line_len > 0 && src[line_start + line_len - 1] == '\r');
+                    int pure_len = has_cr ? (line_len - 1) : line_len;
+
+                    if (pure_len >= 2 && src[line_start] == 'm' && src[line_start + 1] == '=') {
+                        mline_idx++;
+                    }
+
+                    if (mline_idx >= 0 && pure_len >= 6 && strncmp(src + line_start, "a=mid:", 6) == 0) {
+                        int n = snprintf(patched_sdp + out, out_cap - out, "a=mid:%d", mline_idx);
+                        if (n < 0 || n >= (out_cap - out)) {
+                            SAFE_FREE(patched_sdp);
+                            break;
+                        }
+                        out += n;
+                        sdp_mid_patched = true;
+                    } else if (pure_len >= 15 && strncmp(src + line_start, "a=group:BUNDLE", 14) == 0 && total_mlines > 0) {
+                        int n = snprintf(patched_sdp + out, out_cap - out, "a=group:BUNDLE");
+                        if (n < 0 || n >= (out_cap - out)) {
+                            SAFE_FREE(patched_sdp);
+                            break;
+                        }
+                        out += n;
+                        for (int k = 0; k < total_mlines; k++) {
+                            n = snprintf(patched_sdp + out, out_cap - out, " %d", k);
+                            if (n < 0 || n >= (out_cap - out)) {
+                                SAFE_FREE(patched_sdp);
+                                break;
+                            }
+                            out += n;
+                        }
+                        if (patched_sdp == NULL) {
+                            break;
+                        }
+                        sdp_bundle_patched = true;
+                    } else {
+                        if (out + pure_len >= out_cap) {
+                            SAFE_FREE(patched_sdp);
+                            break;
+                        }
+                        memcpy(patched_sdp + out, src + line_start, pure_len);
+                        out += pure_len;
+                    }
+
+                    if (has_lf) {
+                        if (has_cr) {
+                            if (out + 2 >= out_cap) {
+                                SAFE_FREE(patched_sdp);
+                                break;
+                            }
+                            patched_sdp[out++] = '\r';
+                            patched_sdp[out++] = '\n';
+                        } else {
+                            if (out + 1 >= out_cap) {
+                                SAFE_FREE(patched_sdp);
+                                break;
+                            }
+                            patched_sdp[out++] = '\n';
+                        }
+                        i++;
+                    }
+                }
+                if (patched_sdp) {
+                    patched_sdp[out] = 0;
+                    if (sdp_mid_patched || sdp_bundle_patched) {
+                        ESP_LOGW(TAG, "Patched remote SDP mids/bundle to numeric m-line indexes");
+                    }
+                }
+            }
+        }
+
         char *sdp = (char *)msg->data;
         esp_peer_msg_t peer_msg = {
             .type = msg->type,
-            .data = msg->data,
-            .size = msg->size,
+            .data = (uint8_t *)(patched_sdp ? patched_sdp : (char *)msg->data),
+            .size = patched_sdp ? (strlen(patched_sdp) + 1) : msg->size,
         };
         if (STR_SAME(sdp, "candidate:")) {
             peer_msg.type = ESP_PEER_MSG_TYPE_CANDIDATE;
         }
-        return esp_peer_send_msg(rtc->pc, &peer_msg);
+        int ret = esp_peer_send_msg(rtc->pc, &peer_msg);
+        SAFE_FREE(patched_sdp);
+        return ret;
     }
 }
 

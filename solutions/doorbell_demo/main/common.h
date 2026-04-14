@@ -26,13 +26,15 @@ void init_board(void);
 /**
  * @brief  Start WebRTC
  *
- * @param[in]  url  Signaling URL
+ * @param[in]  url        Signaling URL
+ * @param[in]  auth_token Optional signaling auth token (used by WHIP bearer auth)
+ * @param[in]  use_whip   True to use WHIP signaling, false to use AppRTC signaling
  *
  * @return
  *      - 0       On success
  *      - Others  Fail to start
  */
-int start_webrtc(char *url);
+int start_webrtc(char *url, char *auth_token, bool use_whip);
 
 /**
  * @brief  Set stream bitrate for WebRTC

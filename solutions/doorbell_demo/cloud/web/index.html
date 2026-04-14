@@ -128,6 +128,24 @@
       background: #0a1020;
     }
 
+    .liveView {
+      margin-top: 10px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #0a1020;
+      min-height: 220px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+    }
+
+    .liveView video {
+      width: 100%;
+      height: auto;
+      max-height: 420px;
+      display: block;
+    }
+
     .wide { grid-column: 1 / -1; }
     a { color: #8cc8ff; }
     .tiny { font-size: 11px; color: var(--muted); margin-top: 6px; }
@@ -144,7 +162,7 @@
         <div class="grid">
           <div>
             <label>API Base URL</label>
-            <input id="apiBase" value="https://wy3mcplope.execute-api.us-east-2.amazonaws.com" />
+            <input id="apiBase" value="https://ofwruqgx9c.execute-api.us-east-2.amazonaws.com" />
           </div>
           <div>
             <label>Device API Key</label>
@@ -168,10 +186,12 @@
       <section class="card">
         <h2>1) Live Viewing</h2>
         <div class="row">
-          <button class="primary" id="openLiveBtn">Open Live Page</button>
+          <button class="primary" id="connectLiveBtn">Connect LiveKit Viewer</button>
+          <button class="bad" id="disconnectLiveBtn">Disconnect Viewer</button>
         </div>
-        <div id="liveStatus" class="status">Uses AppRTC room page for current firmware stream.</div>
-        <div class="tiny">Current firmware signaling is AppRTC. Enter room name from monitor, then click open.</div>
+        <div id="liveStatus" class="status">Connects this page directly to LiveKit using /token/livekit.</div>
+        <div class="tiny">Room Name should match the one printed by ESP monitor. Viewer token is minted by your AWS API.</div>
+        <div id="liveView" class="liveView tiny">No LiveKit video attached yet.</div>
       </section>
 
       <section class="card">
@@ -216,6 +236,100 @@
       };
     }
 
+    let livekitRoom = null;
+
+    function clearLiveView() {
+      const box = $("liveView");
+      while (box.firstChild) {
+        box.removeChild(box.firstChild);
+      }
+      box.textContent = "No LiveKit video attached yet.";
+      box.className = "liveView tiny";
+    }
+
+    function attachTrack(track, participantIdentity) {
+      const box = $("liveView");
+      if (!track || track.kind !== "video") {
+        return;
+      }
+      box.className = "liveView";
+      box.textContent = "";
+      const el = track.attach();
+      el.autoplay = true;
+      el.playsInline = true;
+      el.muted = true;
+      box.appendChild(el);
+      setStatus("liveStatus", "Live video attached from " + participantIdentity, "ok");
+    }
+
+    async function disconnectLiveViewer() {
+      if (livekitRoom) {
+        livekitRoom.disconnect();
+        livekitRoom = null;
+      }
+      clearLiveView();
+      setStatus("liveStatus", "LiveKit viewer disconnected", "warn");
+    }
+
+    async function connectLiveViewer() {
+      try {
+        const c = validateConfig();
+        if (!c.room) {
+          throw new Error("Enter Room Name from ESP monitor first");
+        }
+        if (!window.LivekitClient || !window.LivekitClient.Room) {
+          throw new Error("LiveKit client script failed to load");
+        }
+
+        await disconnectLiveViewer();
+        setStatus("liveStatus", "Requesting LiveKit viewer token...", "warn");
+
+        const tokenResp = await post("/token/livekit", {
+          deviceId: c.deviceId,
+          roomName: c.room,
+          role: "viewer",
+        });
+
+        const token = tokenResp.token;
+        const wsUrl = tokenResp.wsUrl;
+        const roomName = tokenResp.roomName || c.room;
+        if (!token || !wsUrl) {
+          throw new Error("/token/livekit missing token or wsUrl");
+        }
+
+        const room = new window.LivekitClient.Room({
+          adaptiveStream: true,
+          dynacast: true,
+          autoSubscribe: true,
+        });
+
+        room.on(window.LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+          attachTrack(track, participant.identity || "publisher");
+        });
+
+        room.on(window.LivekitClient.RoomEvent.Disconnected, () => {
+          clearLiveView();
+          setStatus("liveStatus", "LiveKit viewer disconnected", "warn");
+        });
+
+        await room.connect(wsUrl, token);
+        livekitRoom = room;
+
+        for (const participant of room.remoteParticipants.values()) {
+          for (const pub of participant.trackPublications.values()) {
+            if (pub.track && pub.kind === "video") {
+              attachTrack(pub.track, participant.identity || "publisher");
+            }
+          }
+        }
+
+        $("roomName").value = roomName;
+        setStatus("liveStatus", "Connected to LiveKit room " + roomName + ". Waiting for publisher video...", "ok");
+      } catch (e) {
+        setStatus("liveStatus", e.message, "bad");
+      }
+    }
+
     function validateConfig() {
       const c = cfg();
       if (!c.base.startsWith("https://")) {
@@ -229,6 +343,9 @@
       }
       if (!c.deviceId) {
         throw new Error("Device ID is required");
+      }
+      if (c.room && (c.room.startsWith("http://") || c.room.startsWith("https://") || c.room.includes(".whip.livekit.cloud"))) {
+        throw new Error("Room Name must be the LiveKit room id from ESP logs (example: esp_d1ec63_7f4e), not a WHIP URL");
       }
       return c;
     }
@@ -393,16 +510,8 @@
       }
     }
 
-    $("openLiveBtn").addEventListener("click", () => {
-      const c = cfg();
-      if (!c.room) {
-        setStatus("liveStatus", "Enter room name from ESP monitor first.", "bad");
-        return;
-      }
-      const u = "https://webrtc.espressif.com/doorbell";
-      window.open(u, "_blank", "noopener,noreferrer");
-      setStatus("liveStatus", "Opened live page. Join room: " + c.room, "ok");
-    });
+    $("connectLiveBtn").addEventListener("click", connectLiveViewer);
+    $("disconnectLiveBtn").addEventListener("click", disconnectLiveViewer);
 
     $("startBtn").addEventListener("click", () => sendCommand("record_start", "recordStatus"));
     $("stopBtn").addEventListener("click", () => sendCommand("record_stop", "recordStatus"));
@@ -412,5 +521,6 @@
 
     listEvents();
   </script>
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
 </body>
 </html>

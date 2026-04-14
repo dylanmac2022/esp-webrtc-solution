@@ -1,0 +1,27 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Minimal ApiGatewayV2 test for doorbell Lab 7
+Resources:
+  Api:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Body:
+        info:
+          version: '1.0'
+          title: api-test
+        paths:
+          /events:
+            get:
+              responses: {}
+        x-amazon-apigateway-cors:
+          allowHeaders:
+            - authorization
+            - content-type
+            - x-api-key
+          allowMethods:
+            - GET
+            - POST
+            - OPTIONS
+          allowOrigins:
+            - '*'
+        openapi: 3.0.1
+      ProtocolType: HTTP
