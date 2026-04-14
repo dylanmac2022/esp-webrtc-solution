@@ -67,7 +67,7 @@ extern "C" {
 /**
  * @brief  Cloud API base URL (not a secret)
  */
-#define CLOUD_API_BASE_URL  "https://ofwruqgx9c.execute-api.us-east-2.amazonaws.com"
+#define CLOUD_API_BASE_URL  "https://nex0zvlly4.execute-api.us-east-2.amazonaws.com"
 
 /**
  * @brief  Enable cloud integration features

@@ -42,6 +42,7 @@ static struct {
 
 static char room_url[192];
 static char whip_url[192];
+static char whip_auth_token[256];
 static char cloud_token[1800];
 static char cloud_room_name[64];
 static char cloud_ws_url[128];
@@ -820,6 +821,18 @@ static void cloud_get_device_id(char *out, size_t out_size)
     snprintf(out, out_size, "esp32p4-%02x%02x%02x", mac[3], mac[4], mac[5]);
 }
 
+static void cloud_get_livekit_room_name(const char *device_id, char *out, size_t out_size)
+{
+    // Keep room stable across boots so backend can reuse the same LiveKit ingress.
+    const char *suffix = strrchr(device_id, '-');
+    if (suffix && *(suffix + 1)) {
+        suffix++;
+    } else {
+        suffix = device_id;
+    }
+    snprintf(out, out_size, "esp_%s", suffix);
+}
+
 static bool cloud_fetch_livekit_token(const char *device_id, const char *room_name)
 {
     if (!CLOUD_ENABLED) {
@@ -900,6 +913,7 @@ static bool cloud_fetch_livekit_token(const char *device_id, const char *room_na
     cJSON *json_room = cJSON_GetObjectItem(root, "roomName");
     cJSON *ws_url = cJSON_GetObjectItem(root, "wsUrl");
     cJSON *whip_url_json = cJSON_GetObjectItem(root, "whipUrl");
+    cJSON *whip_auth_token_json = cJSON_GetObjectItem(root, "whipAuthToken");
     cJSON *expires = cJSON_GetObjectItem(root, "expiresInSec");
     if (!cJSON_IsString(token) || !cJSON_IsString(json_room) || !cJSON_IsString(ws_url)) {
         cJSON_Delete(root);
@@ -908,10 +922,14 @@ static bool cloud_fetch_livekit_token(const char *device_id, const char *room_na
     }
 
     snprintf(cloud_token, sizeof(cloud_token), "%s", token->valuestring);
+    whip_auth_token[0] = 0;
     snprintf(cloud_room_name, sizeof(cloud_room_name), "%s", json_room->valuestring);
     snprintf(cloud_ws_url, sizeof(cloud_ws_url), "%s", ws_url->valuestring);
     if (cJSON_IsString(whip_url_json)) {
         snprintf(whip_url, sizeof(whip_url), "%s", whip_url_json->valuestring);
+        if (cJSON_IsString(whip_auth_token_json)) {
+            snprintf(whip_auth_token, sizeof(whip_auth_token), "%s", whip_auth_token_json->valuestring);
+        }
     } else {
         whip_url[0] = 0;
     }
@@ -923,6 +941,7 @@ static bool cloud_fetch_livekit_token(const char *device_id, const char *room_na
     ESP_LOGI(CLOUD_TAG, "wsUrl=%s", cloud_ws_url);
     if (whip_url[0]) {
         ESP_LOGI(CLOUD_TAG, "whipUrl=%s", whip_url);
+        ESP_LOGI(CLOUD_TAG, "whipAuthTokenPresent=%s", whip_auth_token[0] ? "true" : "false");
     }
     return true;
 }
@@ -955,24 +974,25 @@ static int network_event_handler(bool connected)
             int ret = -1;
             char *room = NULL;
             char device_id[24];
+            char stable_livekit_room[32];
             cloud_get_device_id(device_id, sizeof(device_id));
+            cloud_get_livekit_room_name(device_id, stable_livekit_room, sizeof(stable_livekit_room));
             for (int attempt = 0; attempt < 3; attempt++) {
                 room = gen_room_id_use_mac(); // New random nonce each attempt
-                ESP_LOGI(CLOUD_TAG, "Requesting LiveKit token for room %s", room);
-                bool token_ok = cloud_fetch_livekit_token(device_id, room);
+                ESP_LOGI(CLOUD_TAG, "Requesting LiveKit token for room %s", stable_livekit_room);
+                bool token_ok = cloud_fetch_livekit_token(device_id, stable_livekit_room);
                 if (token_ok) {
                     if (whip_url[0]) {
                         ESP_LOGI(CLOUD_TAG, "Start WHIP publish to LiveKit room %s", cloud_room_name);
-                        ret = start_webrtc(whip_url, cloud_token, true);
+                        const char *whip_token = whip_auth_token[0] ? whip_auth_token : cloud_token;
+                        ret = start_webrtc(whip_url, (char *)whip_token, true);
                     } else {
-                        ESP_LOGW(CLOUD_TAG, "Backend did not return whipUrl, fallback to AppRTC");
-                        snprintf(room_url, sizeof(room_url), "%s/join/%s", server_url, cloud_room_name);
-                        ret = start_webrtc(room_url, NULL, false);
+                        ESP_LOGE(CLOUD_TAG, "Backend did not return whipUrl; LiveKit publish cannot start");
+                        ret = -1;
                     }
                 } else {
-                    snprintf(room_url, sizeof(room_url), "%s/join/%s", server_url, room);
-                    ESP_LOGI(TAG, "Start to join in room %s", room);
-                    ret = start_webrtc(room_url, NULL, false);
+                    ESP_LOGE(CLOUD_TAG, "LiveKit token fetch failed (attempt %d/3)", attempt + 1);
+                    ret = -1;
                 }
                 if (ret == 0) {
                     break; // Room joined successfully
@@ -982,12 +1002,10 @@ static int network_event_handler(bool connected)
                 if (whip_url[0]) {
                     ESP_LOGW(TAG, "LiveKit WHIP publish active at %s", whip_url);
                 } else {
-                    // Print the room name and browser URL for the user.
-                    // Open https://webrtc.espressif.com/doorbell in Chrome and enter this room name.
-                    ESP_LOGW(TAG, "Please use browser to join in %s on %s/doorbell", room, server_url);
+                    ESP_LOGE(TAG, "LiveKit publish is not active");
                 }
             } else {
-                ESP_LOGE(TAG, "Failed to start webrtc after retries, check network/signaling");
+                ESP_LOGE(TAG, "Failed to start LiveKit publish after retries");
             }
         });
     } else {

@@ -262,11 +262,11 @@ int media_sys_buildup(void)
     // Allocates the source interfaces and opens the synchronized capture pipeline.
     build_capture_system();
 
-    // Step 7: Start capture so frames are produced continuously for WebRTC.
-    // After this call the camera sensor begins streaming frames via MIPI CSI DMA
-    // and the I2S mic begins producing PCM samples. Both are buffered internally
-    // so the WebRTC engine can pull them whenever a peer connection is active.
-    esp_capture_start(capture_sys.capture_handle);
+    // Step 7: Do NOT start capture here.
+    // WebRTC registers sink path 0 inside esp_webrtc pc_start(). If capture is
+    // already running, esp_capture refuses adding a new path and WebRTC ends up
+    // with a null capture path (no outgoing media). Capture is started later by
+    // WebRTC when peer state reaches CONNECTED.
 
     // Step 8: Build local player path (mainly for audio, optional LCD video render).
     // Sets up I2S speaker output for received OPUS audio. Also attempts to set up

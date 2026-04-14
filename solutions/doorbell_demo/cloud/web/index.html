@@ -133,17 +133,18 @@
       border-radius: 10px;
       border: 1px solid var(--line);
       background: #0a1020;
-      min-height: 220px;
+      min-height: 360px;
       display: grid;
       place-items: center;
       overflow: hidden;
+      position: relative;
     }
 
     .liveView video {
       width: 100%;
-      height: auto;
-      max-height: 420px;
+      height: 100%;
       display: block;
+      object-fit: contain;
     }
 
     .wide { grid-column: 1 / -1; }
@@ -162,7 +163,7 @@
         <div class="grid">
           <div>
             <label>API Base URL</label>
-            <input id="apiBase" value="https://ofwruqgx9c.execute-api.us-east-2.amazonaws.com" />
+            <input id="apiBase" value="https://nex0zvlly4.execute-api.us-east-2.amazonaws.com" />
           </div>
           <div>
             <label>Device API Key</label>
@@ -173,12 +174,13 @@
             <input id="deviceId" value="esp32p4-d5c7e8" />
           </div>
           <div>
-            <label>Room Name (from ESP monitor)</label>
-            <input id="roomName" placeholder="esp_d5c7e8_XXXX" />
+            <label>LiveKit Room Name</label>
+            <input id="roomName" placeholder="esp_d5c7e8" value="esp_d5c7e8" />
           </div>
         </div>
         <div class="row">
           <button class="primary" id="testApiBtn">Test API Connection</button>
+          <button class="primary" id="autoConnectBtn">Auto-Connect to Room</button>
         </div>
         <div id="configStatus" class="status"></div>
       </section>
@@ -190,7 +192,7 @@
           <button class="bad" id="disconnectLiveBtn">Disconnect Viewer</button>
         </div>
         <div id="liveStatus" class="status">Connects this page directly to LiveKit using /token/livekit.</div>
-        <div class="tiny">Room Name should match the one printed by ESP monitor. Viewer token is minted by your AWS API.</div>
+        <div class="tiny">Use your project room name (example: esp_d5c7e8), not a LiveKit URL. Viewer token is minted by your AWS API.</div>
         <div id="liveView" class="liveView tiny">No LiveKit video attached yet.</div>
       </section>
 
@@ -237,9 +239,15 @@
     }
 
     let livekitRoom = null;
+    let isConnecting = false;
 
     function clearLiveView() {
       const box = $("liveView");
+      // Don't clear the video on disconnect - just show message overlay
+      const existingVideo = box.querySelector("video");
+      if (existingVideo) {
+        return; // Keep video, don't remove
+      }
       while (box.firstChild) {
         box.removeChild(box.firstChild);
       }
@@ -250,39 +258,58 @@
     function attachTrack(track, participantIdentity) {
       const box = $("liveView");
       if (!track || track.kind !== "video") {
+        console.log("attachTrack: skipping non-video track", track?.kind);
         return;
       }
+      
+      // Check if video already attached
+      const existingVideo = box.querySelector("video");
+      if (existingVideo && existingVideo.srcObject) {
+        console.log("Video already attached, skipping duplicate");
+        return;
+      }
+      
+      console.log("attachTrack: attaching video from", participantIdentity);
       box.className = "liveView";
       box.textContent = "";
       const el = track.attach();
       el.autoplay = true;
       el.playsInline = true;
       el.muted = true;
+      el.style.width = "100%";
+      el.style.height = "100%";
+      el.style.objectFit = "contain";
       box.appendChild(el);
-      setStatus("liveStatus", "Live video attached from " + participantIdentity, "ok");
+      setStatus("liveStatus", "✓ Live video streaming from " + participantIdentity, "ok");
     }
 
     async function disconnectLiveViewer() {
+      isConnecting = false;
       if (livekitRoom) {
+        console.log("Disconnecting LiveKit room...");
         livekitRoom.disconnect();
         livekitRoom = null;
       }
-      clearLiveView();
       setStatus("liveStatus", "LiveKit viewer disconnected", "warn");
     }
 
     async function connectLiveViewer() {
       try {
+        if (isConnecting || livekitRoom) {
+          console.log("Already connecting or connected, skipping...");
+          return;
+        }
+        isConnecting = true;
+
         const c = validateConfig();
         if (!c.room) {
-          throw new Error("Enter Room Name from ESP monitor first");
+          throw new Error("Enter Room Name to connect");
         }
         if (!window.LivekitClient || !window.LivekitClient.Room) {
-          throw new Error("LiveKit client script failed to load");
+          throw new Error("LiveKit client library not loaded. Check CDN connection.");
         }
 
-        await disconnectLiveViewer();
-        setStatus("liveStatus", "Requesting LiveKit viewer token...", "warn");
+        setStatus("liveStatus", "Requesting LiveKit viewer token for room: " + c.room, "warn");
 
         const tokenResp = await post("/token/livekit", {
           deviceId: c.deviceId,
@@ -294,7 +321,7 @@
         const wsUrl = tokenResp.wsUrl;
         const roomName = tokenResp.roomName || c.room;
         if (!token || !wsUrl) {
-          throw new Error("/token/livekit missing token or wsUrl");
+          throw new Error("/token/livekit missing token or wsUrl: " + JSON.stringify(tokenResp));
         }
 
         const room = new window.LivekitClient.Room({
@@ -303,29 +330,61 @@
           autoSubscribe: true,
         });
 
+        let videoFound = false;
+
         room.on(window.LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
-          attachTrack(track, participant.identity || "publisher");
+          console.log("Track subscribed:", track.kind, "from", participant.identity);
+          if (track.kind === "video") {
+            videoFound = true;
+            attachTrack(track, participant.identity || "publisher");
+          } else if (track.kind === "audio") {
+            // Try to resume audio context on first interaction
+            if (room.audioContext && room.audioContext.state === "suspended") {
+              room.audioContext.resume().catch(e => console.log("Could not resume audio:", e));
+            }
+          }
+        });
+
+        room.on(window.LivekitClient.RoomEvent.ParticipantConnected, (participant) => {
+          console.log("Participant connected:", participant.identity);
+          setStatus("liveStatus", "Publisher connected to room: " + roomName, "warn");
         });
 
         room.on(window.LivekitClient.RoomEvent.Disconnected, () => {
-          clearLiveView();
+          console.log("Room disconnected");
+          if (livekitRoom === room) {
+            livekitRoom = null;
+            isConnecting = false;
+          }
           setStatus("liveStatus", "LiveKit viewer disconnected", "warn");
         });
 
+        setStatus("liveStatus", "Connecting to LiveKit at " + wsUrl + "...", "warn");
         await room.connect(wsUrl, token);
         livekitRoom = room;
+        isConnecting = false;
 
+        // Check for existing video tracks
         for (const participant of room.remoteParticipants.values()) {
+          console.log("Checking participant:", participant.identity, "with", participant.trackPublications.size, "tracks");
           for (const pub of participant.trackPublications.values()) {
+            console.log("  Track:", pub.kind, "subscribed=", pub.isSubscribed);
             if (pub.track && pub.kind === "video") {
+              videoFound = true;
               attachTrack(pub.track, participant.identity || "publisher");
             }
           }
         }
 
         $("roomName").value = roomName;
-        setStatus("liveStatus", "Connected to LiveKit room " + roomName + ". Waiting for publisher video...", "ok");
+        if (videoFound) {
+          setStatus("liveStatus", "✓ Connected to LiveKit room " + roomName + ". Video streaming.", "ok");
+        } else {
+          setStatus("liveStatus", "Connected to LiveKit room " + roomName + ". Waiting for publisher video...", "ok");
+        }
       } catch (e) {
+        console.error("connectLiveViewer error:", e);
+        isConnecting = false;
         setStatus("liveStatus", e.message, "bad");
       }
     }
@@ -510,14 +569,40 @@
       }
     }
 
+    // Add click handler to resume audio on user gesture
+    $("liveView").addEventListener("click", () => {
+      if (livekitRoom) {
+        // Resume audio context on user interaction
+        const audioElements = $("liveView").querySelectorAll("audio, video");
+        audioElements.forEach(el => {
+          if (el.muted === false && el.paused) {
+            el.play().catch(e => console.log("Could not play:", e));
+          }
+        });
+      }
+    });
+
     $("connectLiveBtn").addEventListener("click", connectLiveViewer);
     $("disconnectLiveBtn").addEventListener("click", disconnectLiveViewer);
+    $("autoConnectBtn").addEventListener("click", () => {
+      $("roomName").value = "esp_d5c7e8";
+      setTimeout(connectLiveViewer, 100);
+    });
 
     $("startBtn").addEventListener("click", () => sendCommand("record_start", "recordStatus"));
     $("stopBtn").addEventListener("click", () => sendCommand("record_stop", "recordStatus"));
     $("snapBtn").addEventListener("click", () => sendCommand("snapshot", "snapStatus"));
     $("listBtn").addEventListener("click", listEvents);
     $("testApiBtn").addEventListener("click", testApiConnection);
+
+    // Auto-connect to LiveKit on page load
+    window.addEventListener("load", () => {
+      setTimeout(() => {
+        if ($("roomName").value.trim() && !livekitRoom && !isConnecting) {
+          connectLiveViewer();
+        }
+      }, 500);
+    });
 
     listEvents();
   </script>

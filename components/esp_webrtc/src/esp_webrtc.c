@@ -724,6 +724,7 @@ static int signal_new_msg(esp_peer_signaling_msg_t *msg, void *ctx)
             int src_size = msg->size;
 
             int total_mlines = 0;
+            bool has_any_mid_line = false;
             for (int p = 0; p < src_size && src[p] != 0; ) {
                 int start = p;
                 while (p < src_size && src[p] != '\n' && src[p] != 0) {
@@ -732,6 +733,9 @@ static int signal_new_msg(esp_peer_signaling_msg_t *msg, void *ctx)
                 int len = p - start;
                 if (len >= 2 && src[start] == 'm' && src[start + 1] == '=') {
                     total_mlines++;
+                }
+                if (len >= 6 && strncmp(src + start, "a=mid:", 6) == 0) {
+                    has_any_mid_line = true;
                 }
                 if (p < src_size && src[p] == '\n') {
                     p++;
@@ -754,7 +758,8 @@ static int signal_new_msg(esp_peer_signaling_msg_t *msg, void *ctx)
                     bool has_cr = (line_len > 0 && src[line_start + line_len - 1] == '\r');
                     int pure_len = has_cr ? (line_len - 1) : line_len;
 
-                    if (pure_len >= 2 && src[line_start] == 'm' && src[line_start + 1] == '=') {
+                    bool is_mline = (pure_len >= 2 && src[line_start] == 'm' && src[line_start + 1] == '=');
+                    if (is_mline) {
                         mline_idx++;
                     }
 
@@ -792,6 +797,18 @@ static int signal_new_msg(esp_peer_signaling_msg_t *msg, void *ctx)
                         }
                         memcpy(patched_sdp + out, src + line_start, pure_len);
                         out += pure_len;
+
+                        // Some WHIP answers omit a=mid lines entirely. Insert numeric mids
+                        // right after each m= section line so lower-layer parser can map tracks.
+                        if (is_mline && has_any_mid_line == false) {
+                            int n = snprintf(patched_sdp + out, out_cap - out, "\r\na=mid:%d", mline_idx);
+                            if (n < 0 || n >= (out_cap - out)) {
+                                SAFE_FREE(patched_sdp);
+                                break;
+                            }
+                            out += n;
+                            sdp_mid_patched = true;
+                        }
                     }
 
                     if (has_lf) {
