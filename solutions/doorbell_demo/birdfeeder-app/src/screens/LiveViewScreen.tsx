@@ -23,7 +23,7 @@ function RemoteVideo() {
   const videoTracks = useTracks([Track.Source.Camera], {
     onlySubscribed: true,
   });
-  // Audio tracks are subscribed automatically by LiveKitRoom — no explicit render needed.
+  // Subscribe to audio — playback is handled natively by LiveKit after AudioSession.startAudioSession()
   useTracks([Track.Source.Microphone], { onlySubscribed: true });
 
   return (
