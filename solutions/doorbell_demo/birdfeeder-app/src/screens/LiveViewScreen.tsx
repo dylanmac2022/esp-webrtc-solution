@@ -8,15 +8,51 @@ import {
   ActivityIndicator,
   ScrollView,
 } from 'react-native';
+import { Track } from 'livekit-client';
+import {
+  LiveKitRoom,
+  useTracks,
+  VideoTrack,
+} from '@livekit/react-native';
 import { sendCommand, getViewerToken } from '../services/api';
 
 type ConnectionStatus = 'disconnected' | 'connecting' | 'live';
+
+/** Inner component that renders remote video tracks inside LiveKitRoom context */
+function RemoteVideo() {
+  const videoTracks = useTracks([Track.Source.Camera], {
+    onlySubscribed: true,
+  });
+  // Audio tracks are subscribed automatically by LiveKitRoom — no explicit render needed.
+  useTracks([Track.Source.Microphone], { onlySubscribed: true });
+
+  return (
+    <View style={styles.videoContainer}>
+      {videoTracks.length > 0 ? (
+        <>
+          <VideoTrack
+            trackRef={videoTracks[0]}
+            style={{ width: '100%', height: '100%' } as any}
+            objectFit="contain"
+          />
+          <View style={styles.liveBadge}>
+            <Text style={styles.liveBadgeText}>🔴 LIVE</Text>
+          </View>
+        </>
+      ) : (
+        <Text style={styles.videoPlaceholder}>Waiting for camera stream...</Text>
+      )}
+    </View>
+  );
+}
 
 export default function LiveViewScreen() {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const [recording, setRecording] = useState(false);
   const [sending, setSending] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
+  const [token, setToken] = useState<string | null>(null);
+  const [wsUrl, setWsUrl] = useState<string | null>(null);
 
   const addLog = (msg: string) => {
     const ts = new Date().toLocaleTimeString();
@@ -25,8 +61,9 @@ export default function LiveViewScreen() {
 
   const handleConnect = async () => {
     if (status === 'live') {
-      // Disconnect
       setStatus('disconnected');
+      setToken(null);
+      setWsUrl(null);
       addLog('Disconnected from live view');
       return;
     }
@@ -35,6 +72,8 @@ export default function LiveViewScreen() {
       setStatus('connecting');
       addLog('Requesting LiveKit viewer token...');
       const data = await getViewerToken();
+      setToken(data.token);
+      setWsUrl(data.wsUrl);
       setStatus('live');
       addLog(`Connected to room: ${data.roomName}`);
     } catch (e: any) {
@@ -84,22 +123,23 @@ export default function LiveViewScreen() {
       </View>
 
       {/* Video Area */}
-      <View style={styles.videoContainer}>
-        {status === 'live' ? (
-          <View style={styles.liveIndicator}>
-            <Text style={styles.liveText}>🔴 LIVE</Text>
-            <Text style={styles.videoSubtext}>
-              Live video is streaming from the bird feeder.{'\n'}
-              View in LiveKit Meet or the web dashboard for full video.{'\n'}
-              Token acquired — room connected.
-            </Text>
-          </View>
-        ) : (
+      {status === 'live' && token && wsUrl ? (
+        <LiveKitRoom
+          serverUrl={wsUrl}
+          token={token}
+          connect={true}
+          audio={true}
+          video={false}
+        >
+          <RemoteVideo />
+        </LiveKitRoom>
+      ) : (
+        <View style={styles.videoContainer}>
           <Text style={styles.videoPlaceholder}>
             {status === 'connecting' ? 'Connecting...' : 'Tap "Connect" to start live view'}
           </Text>
-        )}
-      </View>
+        </View>
+      )}
 
       {/* Connect / Disconnect Button */}
       <TouchableOpacity
@@ -173,11 +213,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 16,
+    overflow: 'hidden',
   },
   videoPlaceholder: { color: '#666', textAlign: 'center', fontSize: 15 },
-  liveIndicator: { alignItems: 'center', padding: 20 },
-  liveText: { color: '#e74c3c', fontSize: 22, fontWeight: 'bold', marginBottom: 8 },
-  videoSubtext: { color: '#aaa', textAlign: 'center', fontSize: 13, lineHeight: 20 },
+  liveBadge: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  liveBadgeText: { color: '#e74c3c', fontSize: 13, fontWeight: 'bold' },
   controlRow: { flexDirection: 'row', marginBottom: 16 },
   btn: { paddingVertical: 14, borderRadius: 8, alignItems: 'center', marginBottom: 10 },
   btnPrimary: { backgroundColor: '#3498db' },
