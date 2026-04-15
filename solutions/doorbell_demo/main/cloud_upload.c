@@ -245,7 +245,7 @@ static int capture_jpeg_frame(uint8_t **out_data, int *out_size)
                 enc_cfg.height      = VIDEO_HEIGHT;
                 enc_cfg.src_type    = JPEG_PIXEL_FORMAT_RGB565_LE;
                 enc_cfg.subsampling = JPEG_SUBSAMPLE_420;
-                enc_cfg.quality     = 50;
+                enc_cfg.quality     = 80;
                 enc_cfg.task_enable = false;
 
                 jpeg_enc_handle_t enc = NULL;
@@ -320,7 +320,8 @@ static void do_capture_snapshot(void)
     }
 
     const char *upload_url = url_obj->valuestring;
-    const char *s3_key = key_obj ? key_obj->valuestring : "unknown";
+    /* strdup the s3_key before we free the response – avoids use-after-free */
+    char *s3_key = strdup(key_obj && key_obj->valuestring ? key_obj->valuestring : "unknown");
 
     /* Step 2: Capture a real MJPEG frame from the camera */
     uint8_t *jpeg_data = NULL;
@@ -329,6 +330,7 @@ static void do_capture_snapshot(void)
     if (cap_ret != 0 || !jpeg_data) {
         ESP_LOGE(TAG, "Failed to capture JPEG frame");
         cJSON_Delete(resp);
+        free(s3_key);
         return;
     }
 
@@ -339,6 +341,7 @@ static void do_capture_snapshot(void)
 
     if (ret != 0) {
         ESP_LOGE(TAG, "Snapshot upload failed");
+        free(s3_key);
         return;
     }
 
@@ -354,6 +357,7 @@ static void do_capture_snapshot(void)
     cJSON_AddStringToObject(s3_keys, "snapshot", s3_key);
     cJSON_AddItemToObject(event_req, "s3Keys", s3_keys);
     cJSON_AddStringToObject(event_req, "uploadStatus", "complete");
+    free(s3_key);
 
     cJSON *event_resp = api_post_json("/events", event_req);
     cJSON_Delete(event_req);
