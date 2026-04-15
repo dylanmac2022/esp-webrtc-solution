@@ -191,6 +191,21 @@ static int upload_to_s3(const char *upload_url, const uint8_t *data, int size, c
 static bool    recording_active = false;
 static int64_t record_start_time = 0;
 
+/* ── MJPEG recording ring-buffer in PSRAM ── */
+#define REC_MAX_FRAMES      60          /* max frames to buffer (e.g. 2fps × 30s) */
+#define REC_CAPTURE_INTERVAL_MS  500    /* capture one frame every 500ms = 2fps */
+#define REC_MAX_BUFFER      (3 * 1024 * 1024)  /* 3 MB max for all JPEG frames */
+
+typedef struct {
+    uint8_t *data;
+    int      size;
+} rec_frame_t;
+
+static rec_frame_t  rec_frames[REC_MAX_FRAMES];
+static int          rec_frame_count = 0;
+static int          rec_total_bytes = 0;
+static media_lib_thread_handle_t rec_thread = NULL;
+
 /**
  * Grab a single RGB565 frame from the pre-created snapshot sink,
  * encode it to JPEG with the hardware JPEG encoder, and return
@@ -353,6 +368,199 @@ static void do_capture_snapshot(void)
 
 /* ──────────────────── Recording commands ──────────────────── */
 
+/* Free all buffered recording frames */
+static void rec_free_frames(void)
+{
+    for (int i = 0; i < rec_frame_count; i++) {
+        if (rec_frames[i].data) {
+            heap_caps_free(rec_frames[i].data);
+            rec_frames[i].data = NULL;
+        }
+    }
+    rec_frame_count = 0;
+    rec_total_bytes = 0;
+}
+
+/* Background task that captures JPEG frames while recording is active */
+static void rec_capture_task(void *arg)
+{
+    ESP_LOGI(TAG, "Recording capture task started (interval=%dms, max_frames=%d)",
+             REC_CAPTURE_INTERVAL_MS, REC_MAX_FRAMES);
+
+    while (recording_active && rec_frame_count < REC_MAX_FRAMES
+           && rec_total_bytes < REC_MAX_BUFFER) {
+        uint8_t *jpeg_data = NULL;
+        int jpeg_size = 0;
+
+        if (capture_jpeg_frame(&jpeg_data, &jpeg_size) == 0 && jpeg_data) {
+            rec_frames[rec_frame_count].data = jpeg_data;
+            rec_frames[rec_frame_count].size = jpeg_size;
+            rec_frame_count++;
+            rec_total_bytes += jpeg_size;
+            ESP_LOGI(TAG, "Rec frame %d: %d bytes (total=%d)", rec_frame_count, jpeg_size, rec_total_bytes);
+        } else {
+            ESP_LOGW(TAG, "Rec frame capture failed, skipping");
+        }
+
+        /* Wait for next capture interval (check recording_active frequently) */
+        for (int ms = 0; ms < REC_CAPTURE_INTERVAL_MS && recording_active; ms += 50) {
+            media_lib_thread_sleep(50);
+        }
+    }
+
+    ESP_LOGI(TAG, "Recording capture task finished: %d frames, %d bytes", rec_frame_count, rec_total_bytes);
+    media_lib_thread_destroy(NULL);
+}
+
+/* ── Build MJPEG AVI container from buffered frames ── */
+
+/* Helper: write a little-endian 32-bit value */
+static void write_le32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v);
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+static void write_le16(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)(v);
+    p[1] = (uint8_t)(v >> 8);
+}
+
+/**
+ * Build an AVI (MJPEG) container from the buffered JPEG frames.
+ * Allocates buffer in PSRAM. Caller must heap_caps_free().
+ * Returns 0 on success.
+ */
+static int build_avi_mjpeg(uint8_t **out_data, int *out_size, int fps)
+{
+    if (rec_frame_count == 0) return -1;
+    if (fps <= 0) fps = 2;
+
+    /* Calculate sizes */
+    int movi_data_size = 0;
+    for (int i = 0; i < rec_frame_count; i++) {
+        int padded = (rec_frames[i].size + 1) & ~1;  /* pad to 2-byte boundary */
+        movi_data_size += 8 + padded;  /* "00dc" + size + data */
+    }
+
+    int idx1_size = rec_frame_count * 16;
+    int hdrl_size = 4 + (8 + 56) + (8 + 4 + (8 + 56) + (8 + 40));  /* LIST hdrl */
+    int movi_list_size = 4 + movi_data_size;  /* LIST movi */
+    int riff_size = 4 + (8 + hdrl_size) + (8 + movi_list_size) + (8 + idx1_size);
+
+    int total_size = 8 + riff_size;
+    uint8_t *buf = heap_caps_malloc(total_size, MALLOC_CAP_SPIRAM);
+    if (!buf) {
+        ESP_LOGE(TAG, "Failed to alloc AVI buffer (%d bytes)", total_size);
+        return -1;
+    }
+    memset(buf, 0, total_size);
+
+    uint8_t *p = buf;
+    int usec_per_frame = 1000000 / fps;
+
+    /* RIFF header */
+    memcpy(p, "RIFF", 4); p += 4;
+    write_le32(p, riff_size); p += 4;
+    memcpy(p, "AVI ", 4); p += 4;
+
+    /* LIST hdrl */
+    memcpy(p, "LIST", 4); p += 4;
+    write_le32(p, hdrl_size); p += 4;
+    memcpy(p, "hdrl", 4); p += 4;
+
+    /* avih (main AVI header) — 56 bytes */
+    memcpy(p, "avih", 4); p += 4;
+    write_le32(p, 56); p += 4;
+    write_le32(p, usec_per_frame); p += 4;    /* dwMicroSecPerFrame */
+    write_le32(p, 0); p += 4;                 /* dwMaxBytesPerSec */
+    write_le32(p, 0); p += 4;                 /* dwPaddingGranularity */
+    write_le32(p, 0x10); p += 4;              /* dwFlags: AVIF_HASINDEX */
+    write_le32(p, rec_frame_count); p += 4;   /* dwTotalFrames */
+    write_le32(p, 0); p += 4;                 /* dwInitialFrames */
+    write_le32(p, 1); p += 4;                 /* dwStreams */
+    write_le32(p, 0); p += 4;                 /* dwSuggestedBufferSize */
+    write_le32(p, VIDEO_WIDTH); p += 4;       /* dwWidth */
+    write_le32(p, VIDEO_HEIGHT); p += 4;      /* dwHeight */
+    p += 16;                                  /* dwReserved[4] */
+
+    /* LIST strl */
+    int strl_size = 4 + (8 + 56) + (8 + 40);
+    memcpy(p, "LIST", 4); p += 4;
+    write_le32(p, strl_size); p += 4;
+    memcpy(p, "strl", 4); p += 4;
+
+    /* strh (stream header) — 56 bytes */
+    memcpy(p, "strh", 4); p += 4;
+    write_le32(p, 56); p += 4;
+    memcpy(p, "vids", 4); p += 4;            /* fccType */
+    memcpy(p, "MJPG", 4); p += 4;            /* fccHandler */
+    write_le32(p, 0); p += 4;                /* dwFlags */
+    write_le16(p, 0); p += 2;                /* wPriority */
+    write_le16(p, 0); p += 2;                /* wLanguage */
+    write_le32(p, 0); p += 4;                /* dwInitialFrames */
+    write_le32(p, 1); p += 4;                /* dwScale */
+    write_le32(p, fps); p += 4;              /* dwRate */
+    write_le32(p, 0); p += 4;                /* dwStart */
+    write_le32(p, rec_frame_count); p += 4;  /* dwLength */
+    write_le32(p, 0); p += 4;                /* dwSuggestedBufferSize */
+    write_le32(p, 0); p += 4;                /* dwQuality */
+    write_le32(p, 0); p += 4;                /* dwSampleSize */
+    write_le16(p, 0); p += 2;                /* rcFrame left */
+    write_le16(p, 0); p += 2;                /* rcFrame top */
+    write_le16(p, VIDEO_WIDTH); p += 2;      /* rcFrame right */
+    write_le16(p, VIDEO_HEIGHT); p += 2;     /* rcFrame bottom */
+
+    /* strf (BITMAPINFOHEADER) — 40 bytes */
+    memcpy(p, "strf", 4); p += 4;
+    write_le32(p, 40); p += 4;
+    write_le32(p, 40); p += 4;               /* biSize */
+    write_le32(p, VIDEO_WIDTH); p += 4;      /* biWidth */
+    write_le32(p, VIDEO_HEIGHT); p += 4;     /* biHeight */
+    write_le16(p, 1); p += 2;                /* biPlanes */
+    write_le16(p, 24); p += 2;               /* biBitCount */
+    memcpy(p, "MJPG", 4); p += 4;           /* biCompression */
+    write_le32(p, VIDEO_WIDTH * VIDEO_HEIGHT * 3); p += 4; /* biSizeImage */
+    p += 16;                                  /* rest zeros */
+
+    /* LIST movi */
+    memcpy(p, "LIST", 4); p += 4;
+    write_le32(p, movi_list_size); p += 4;
+    memcpy(p, "movi", 4); p += 4;
+
+    uint8_t *movi_start = p;
+
+    for (int i = 0; i < rec_frame_count; i++) {
+        int padded = (rec_frames[i].size + 1) & ~1;
+        memcpy(p, "00dc", 4); p += 4;
+        write_le32(p, rec_frames[i].size); p += 4;
+        memcpy(p, rec_frames[i].data, rec_frames[i].size);
+        p += padded;
+    }
+
+    /* idx1 index */
+    memcpy(p, "idx1", 4); p += 4;
+    write_le32(p, idx1_size); p += 4;
+
+    uint32_t offset = 4;  /* offset from movi start (after 'movi' tag) */
+    for (int i = 0; i < rec_frame_count; i++) {
+        int padded = (rec_frames[i].size + 1) & ~1;
+        memcpy(p, "00dc", 4); p += 4;
+        write_le32(p, 0x10); p += 4;             /* AVIIF_KEYFRAME */
+        write_le32(p, offset); p += 4;
+        write_le32(p, rec_frames[i].size); p += 4;
+        offset += 8 + padded;
+    }
+
+    *out_data = buf;
+    *out_size = total_size;
+    ESP_LOGI(TAG, "AVI MJPEG built: %d bytes, %d frames @ %dfps", total_size, rec_frame_count, fps);
+    return 0;
+}
+
 static void do_record_start(void)
 {
     if (recording_active) {
@@ -360,9 +568,19 @@ static void do_record_start(void)
         return;
     }
 
+    /* Free any leftover frames from previous recording */
+    rec_free_frames();
+
     record_start_time = get_epoch_ms();
     recording_active = true;
-    ESP_LOGI(TAG, "Recording started (live stream is being recorded via LiveKit)");
+    ESP_LOGI(TAG, "Recording started — buffering JPEG frames in PSRAM");
+
+    /* Start the frame capture background task */
+    int ret = media_lib_thread_create_from_scheduler(&rec_thread, "rec_cap", rec_capture_task, NULL);
+    if (ret != 0) {
+        ESP_LOGE(TAG, "Failed to create recording capture task");
+        recording_active = false;
+    }
 }
 
 static void do_record_stop(void)
@@ -373,14 +591,13 @@ static void do_record_stop(void)
     }
 
     recording_active = false;
+    /* Wait for capture task to finish */
+    media_lib_thread_sleep(1000);
+
     int64_t duration_ms = get_epoch_ms() - record_start_time;
     int duration_sec = (int)(duration_ms / 1000);
-    ESP_LOGI(TAG, "Recording stopped. Duration=%ds", duration_sec);
-
-    /* Capture a snapshot as the recording thumbnail */
-    uint8_t *thumb_data = NULL;
-    int thumb_size = 0;
-    capture_jpeg_frame(&thumb_data, &thumb_size);
+    if (duration_sec < 1) duration_sec = 1;
+    ESP_LOGI(TAG, "Recording stopped. Duration=%ds, frames=%d", duration_sec, rec_frame_count);
 
     char event_id[20];
     char session_id[20];
@@ -390,10 +607,13 @@ static void do_record_stop(void)
     gen_event_id(session_id, sizeof(session_id));
     get_iso_timestamp(timestamp, sizeof(timestamp));
 
-    const char *s3_key_thumb_copy = NULL;
+    const char *s3_key_thumb = NULL;
+    const char *s3_key_video = NULL;
 
-    /* Upload thumbnail if captured */
-    if (thumb_data && thumb_size > 0) {
+    /* ── Upload thumbnail (last captured frame as JPEG) ── */
+    if (rec_frame_count > 0) {
+        rec_frame_t *last = &rec_frames[rec_frame_count - 1];
+
         cJSON *url_req = cJSON_CreateObject();
         cJSON_AddStringToObject(url_req, "deviceId", DEVICE_ID);
         cJSON_AddStringToObject(url_req, "eventId", event_id);
@@ -408,17 +628,53 @@ static void do_record_stop(void)
             cJSON *uo = cJSON_GetObjectItem(url_resp, "uploadUrl");
             cJSON *ko = cJSON_GetObjectItem(url_resp, "key");
             if (uo && cJSON_IsString(uo)) {
-                upload_to_s3(uo->valuestring, thumb_data, thumb_size, "image/jpeg");
+                upload_to_s3(uo->valuestring, last->data, last->size, "image/jpeg");
                 if (ko && cJSON_IsString(ko)) {
-                    s3_key_thumb_copy = strdup(ko->valuestring);
+                    s3_key_thumb = strdup(ko->valuestring);
                 }
             }
             cJSON_Delete(url_resp);
         }
-        heap_caps_free(thumb_data);
     }
 
-    /* Create event */
+    /* ── Build and upload AVI video ── */
+    if (rec_frame_count >= 2) {
+        int fps = 2;  /* matches our capture interval */
+        uint8_t *avi_data = NULL;
+        int avi_size = 0;
+
+        if (build_avi_mjpeg(&avi_data, &avi_size, fps) == 0 && avi_data) {
+            cJSON *url_req = cJSON_CreateObject();
+            cJSON_AddStringToObject(url_req, "deviceId", DEVICE_ID);
+            cJSON_AddStringToObject(url_req, "eventId", event_id);
+            cJSON_AddStringToObject(url_req, "mediaType", "video");
+            cJSON_AddStringToObject(url_req, "contentType", "video/avi");
+            cJSON_AddStringToObject(url_req, "sessionId", session_id);
+
+            cJSON *url_resp = api_post_json("/media/upload-url", url_req);
+            cJSON_Delete(url_req);
+
+            if (url_resp) {
+                cJSON *uo = cJSON_GetObjectItem(url_resp, "uploadUrl");
+                cJSON *ko = cJSON_GetObjectItem(url_resp, "key");
+                if (uo && cJSON_IsString(uo)) {
+                    int ret = upload_to_s3(uo->valuestring, avi_data, avi_size, "video/avi");
+                    if (ret == 0 && ko && cJSON_IsString(ko)) {
+                        s3_key_video = strdup(ko->valuestring);
+                    }
+                }
+                cJSON_Delete(url_resp);
+            }
+            heap_caps_free(avi_data);
+        }
+    } else {
+        ESP_LOGW(TAG, "Not enough frames (%d) to build video", rec_frame_count);
+    }
+
+    /* ── Free frame buffers ── */
+    rec_free_frames();
+
+    /* ── Create event metadata ── */
     cJSON *event_req = cJSON_CreateObject();
     cJSON_AddStringToObject(event_req, "deviceId", DEVICE_ID);
     cJSON_AddNumberToObject(event_req, "eventTs", (double)get_epoch_ms());
@@ -428,18 +684,22 @@ static void do_record_stop(void)
     cJSON_AddNumberToObject(event_req, "durationSec", duration_sec);
 
     cJSON *s3_keys = cJSON_CreateObject();
-    if (s3_key_thumb_copy) {
-        cJSON_AddStringToObject(s3_keys, "snapshot", s3_key_thumb_copy);
-        free((void *)s3_key_thumb_copy);
+    if (s3_key_thumb) {
+        cJSON_AddStringToObject(s3_keys, "snapshot", s3_key_thumb);
+        free((void *)s3_key_thumb);
+    }
+    if (s3_key_video) {
+        cJSON_AddStringToObject(s3_keys, "video", s3_key_video);
+        free((void *)s3_key_video);
     }
     cJSON_AddItemToObject(event_req, "s3Keys", s3_keys);
-    cJSON_AddStringToObject(event_req, "uploadStatus", "complete");
+    cJSON_AddStringToObject(event_req, "uploadStatus", s3_key_video ? "complete" : "partial");
 
     cJSON *event_resp = api_post_json("/events", event_req);
     cJSON_Delete(event_req);
 
     if (event_resp) {
-        ESP_LOGI(TAG, "Recording event created (duration=%ds)", duration_sec);
+        ESP_LOGI(TAG, "Recording event created (duration=%ds, video=%s)", duration_sec, s3_key_video ? "yes" : "no");
         cJSON_Delete(event_resp);
     } else {
         ESP_LOGE(TAG, "Failed to create recording event");

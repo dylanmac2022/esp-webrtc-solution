@@ -228,6 +228,10 @@ static void thread_scheduler(const char *thread_name, media_lib_thread_cfg_t *sc
     if (strcmp(thread_name, "cloud_cmd") == 0) {
         schedule_cfg->stack_size = 12 * 1024;
     }
+    /* Recording capture task needs stack for JPEG encoding */
+    if (strcmp(thread_name, "rec_cap") == 0) {
+        schedule_cfg->stack_size = 12 * 1024;
+    }
 }
 
 static void capture_scheduler(const char *name, esp_capture_thread_schedule_cfg_t *schedule_cfg)
