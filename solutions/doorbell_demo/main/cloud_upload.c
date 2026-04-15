@@ -18,6 +18,10 @@
 #include "cJSON.h"
 #include "media_lib_os.h"
 #include "settings.h"
+#include "esp_crt_bundle.h"
+#include "esp_capture_sink.h"
+#include "esp_jpeg_enc.h"
+#include "common.h"
 
 #define TAG "CLOUD_UPLOAD"
 
@@ -109,6 +113,7 @@ static cJSON *api_post_json(const char *path, cJSON *body)
         .timeout_ms = 15000,
         .buffer_size = 2048,
         .buffer_size_tx = 2048,
+        .crt_bundle_attach = esp_crt_bundle_attach,
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -151,6 +156,7 @@ static int upload_to_s3(const char *upload_url, const uint8_t *data, int size, c
         .timeout_ms = 30000,
         .buffer_size = 4096,
         .buffer_size_tx = 4096,
+        .crt_bundle_attach = esp_crt_bundle_attach,
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -170,36 +176,86 @@ static int upload_to_s3(const char *upload_url, const uint8_t *data, int size, c
     return 0;
 }
 
-/* ──────────────────── Snapshot capture ──────────────────── */
-
-/* We capture a raw frame from the video encoder and send the H.264 IDR frame
- * directly (since JPEG encode from raw would require decoding H.264 first).
- * For simplicity, we upload the latest H.264 keyframe as a "snapshot".
- * The browser can decode it, or we can use the JPEG encoder if available.
- *
- * Alternative approach: intercept raw YUV frame and JPEG-encode it.
- * For this implementation we use a simpler approach: capture a frame
- * from the video pipeline and upload it.
- */
-
-/* Buffer for captured snapshot data */
-static uint8_t *snapshot_buf = NULL;
-static int       snapshot_size = 0;
-static bool      snapshot_requested = false;
-static bool      snapshot_ready = false;
+/* ──────────────────── Capture helpers ──────────────────── */
 
 /* Recording state */
-static bool     recording_active = false;
-static uint8_t *record_buf = NULL;
-static int      record_buf_pos = 0;
-static int      record_buf_capacity = 0;
-static int64_t  record_start_time = 0;
+static bool    recording_active = false;
+static int64_t record_start_time = 0;
 
 /**
- * Called from the video encoder output path to tap frames for snapshot/recording.
- * This should be hooked into the media pipeline.
- * For now, we'll capture directly in the command handler using the capture API.
+ * Grab a single RGB565 frame from the pre-created snapshot sink,
+ * encode it to JPEG with the hardware JPEG encoder, and return
+ * the JPEG buffer (allocated in PSRAM — caller must free).
  */
+static int capture_jpeg_frame(uint8_t **out_data, int *out_size)
+{
+    esp_capture_sink_handle_t sink = media_sys_get_snapshot_sink();
+    if (!sink) {
+        ESP_LOGE(TAG, "Snapshot sink not available");
+        return -1;
+    }
+
+    /* ONESHOT: capture exactly one frame then auto-disable */
+    esp_capture_sink_enable(sink, ESP_CAPTURE_RUN_MODE_ONESHOT);
+
+    esp_capture_stream_frame_t frame = {
+        .stream_type = ESP_CAPTURE_STREAM_TYPE_VIDEO,
+    };
+
+    int ret = -1;
+    for (int tries = 0; tries < 30; tries++) {
+        if (esp_capture_sink_acquire_frame(sink, &frame, true) == ESP_CAPTURE_ERR_OK) {
+            if (frame.size > 0 && frame.data) {
+                /* Allocate JPEG output buffer in PSRAM */
+                int jpeg_buf_size = 300 * 1024;
+                uint8_t *jpeg_buf = heap_caps_malloc(jpeg_buf_size, MALLOC_CAP_SPIRAM);
+                if (!jpeg_buf) {
+                    ESP_LOGE(TAG, "Failed to alloc JPEG output buffer");
+                    esp_capture_sink_release_frame(sink, &frame);
+                    break;
+                }
+
+                /* Encode the RGB565 frame to JPEG */
+                jpeg_enc_config_t enc_cfg = DEFAULT_JPEG_ENC_CONFIG();
+                enc_cfg.width       = VIDEO_WIDTH;
+                enc_cfg.height      = VIDEO_HEIGHT;
+                enc_cfg.src_type    = JPEG_PIXEL_FORMAT_RGB565_LE;
+                enc_cfg.subsampling = JPEG_SUBSAMPLE_420;
+                enc_cfg.quality     = 50;
+                enc_cfg.task_enable = false;
+
+                jpeg_enc_handle_t enc = NULL;
+                if (jpeg_enc_open(&enc_cfg, &enc) == JPEG_ERR_OK && enc) {
+                    int jpeg_size = 0;
+                    if (jpeg_enc_process(enc, frame.data, frame.size,
+                                         jpeg_buf, jpeg_buf_size, &jpeg_size) == JPEG_ERR_OK) {
+                        *out_data = jpeg_buf;
+                        *out_size = jpeg_size;
+                        ret = 0;
+                        ESP_LOGI(TAG, "JPEG encoded: %d bytes from %d byte RGB565 frame",
+                                 jpeg_size, frame.size);
+                    } else {
+                        ESP_LOGE(TAG, "JPEG encode failed");
+                        heap_caps_free(jpeg_buf);
+                    }
+                    jpeg_enc_close(enc);
+                } else {
+                    ESP_LOGE(TAG, "Failed to open JPEG encoder");
+                    heap_caps_free(jpeg_buf);
+                }
+
+                esp_capture_sink_release_frame(sink, &frame);
+                break;
+            }
+            esp_capture_sink_release_frame(sink, &frame);
+        }
+        media_lib_thread_sleep(50);
+    }
+
+    /* Ensure sink is disabled (ONESHOT auto-disables, but be safe) */
+    esp_capture_sink_enable(sink, ESP_CAPTURE_RUN_MODE_DISABLE);
+    return ret;
+}
 
 /* ──────────────────── Snapshot command ──────────────────── */
 
@@ -242,26 +298,19 @@ static void do_capture_snapshot(void)
     const char *upload_url = url_obj->valuestring;
     const char *s3_key = key_obj ? key_obj->valuestring : "unknown";
 
-    /* Step 2: Capture a JPEG snapshot from the camera.
-     * Since we don't have direct raw frame access inline, we'll create a
-     * minimal JPEG placeholder. In production, hook into esp_capture API.
-     * For the demo, we try to use the capture pipeline's snapshot ability.
-     */
+    /* Step 2: Capture a real MJPEG frame from the camera */
+    uint8_t *jpeg_data = NULL;
+    int jpeg_size = 0;
+    int cap_ret = capture_jpeg_frame(&jpeg_data, &jpeg_size);
+    if (cap_ret != 0 || !jpeg_data) {
+        ESP_LOGE(TAG, "Failed to capture JPEG frame");
+        cJSON_Delete(resp);
+        return;
+    }
 
-    /* Use a simple test image for now — in the real build this will be replaced
-     * with actual camera frame capture + JPEG encode */
-    /* Try to grab a raw frame from the video pipeline.
-     * We'll use the H.264 keyframe data as a proxy since getting raw JPEG
-     * requires more pipeline integration. The cloud/browser decodes it. */
-
-    /* For actual implementation: We need to create a JPEG from camera.
-     * The esp_new_jpeg component can encode raw frames.
-     * For now, upload a simple test payload to prove the pipeline works. */
-    const char *test_payload = "JPEG_PLACEHOLDER";
-    int payload_size = strlen(test_payload);
-
-    ESP_LOGI(TAG, "Uploading snapshot to S3 (key=%s)...", s3_key);
-    int ret = upload_to_s3(upload_url, (const uint8_t *)test_payload, payload_size, "image/jpeg");
+    ESP_LOGI(TAG, "Captured JPEG snapshot: %d bytes, uploading to S3 (key=%s)...", jpeg_size, s3_key);
+    int ret = upload_to_s3(upload_url, jpeg_data, jpeg_size, "image/jpeg");
+    heap_caps_free(jpeg_data);
     cJSON_Delete(resp);
 
     if (ret != 0) {
@@ -302,23 +351,9 @@ static void do_record_start(void)
         return;
     }
 
-    /* Allocate recording buffer in PSRAM (up to 2MB for demo) */
-    record_buf_capacity = 2 * 1024 * 1024;
-    record_buf = (uint8_t *)heap_caps_malloc(record_buf_capacity, MALLOC_CAP_SPIRAM);
-    if (!record_buf) {
-        /* Fall back to smaller internal buffer */
-        record_buf_capacity = 256 * 1024;
-        record_buf = (uint8_t *)malloc(record_buf_capacity);
-        if (!record_buf) {
-            ESP_LOGE(TAG, "Failed to allocate recording buffer");
-            return;
-        }
-    }
-
-    record_buf_pos = 0;
     record_start_time = get_epoch_ms();
     recording_active = true;
-    ESP_LOGI(TAG, "Recording started (buffer=%d bytes)", record_buf_capacity);
+    ESP_LOGI(TAG, "Recording started (live stream is being recorded via LiveKit)");
 }
 
 static void do_record_stop(void)
@@ -331,16 +366,12 @@ static void do_record_stop(void)
     recording_active = false;
     int64_t duration_ms = get_epoch_ms() - record_start_time;
     int duration_sec = (int)(duration_ms / 1000);
+    ESP_LOGI(TAG, "Recording stopped. Duration=%ds", duration_sec);
 
-    ESP_LOGI(TAG, "Recording stopped. Duration=%ds, buffered=%d bytes",
-             duration_sec, record_buf_pos);
-
-    if (record_buf_pos == 0) {
-        ESP_LOGW(TAG, "No data recorded, skipping upload");
-        free(record_buf);
-        record_buf = NULL;
-        return;
-    }
+    /* Capture a snapshot as the recording thumbnail */
+    uint8_t *thumb_data = NULL;
+    int thumb_size = 0;
+    capture_jpeg_frame(&thumb_data, &thumb_size);
 
     char event_id[20];
     char session_id[20];
@@ -350,48 +381,32 @@ static void do_record_stop(void)
     gen_event_id(session_id, sizeof(session_id));
     get_iso_timestamp(timestamp, sizeof(timestamp));
 
-    /* Request upload URL */
-    cJSON *req = cJSON_CreateObject();
-    cJSON_AddStringToObject(req, "deviceId", DEVICE_ID);
-    cJSON_AddStringToObject(req, "eventId", event_id);
-    cJSON_AddStringToObject(req, "mediaType", "video");
-    cJSON_AddStringToObject(req, "contentType", "video/mp4");
-    cJSON_AddStringToObject(req, "sessionId", session_id);
+    const char *s3_key_thumb_copy = NULL;
 
-    cJSON *resp = api_post_json("/media/upload-url", req);
-    cJSON_Delete(req);
+    /* Upload thumbnail if captured */
+    if (thumb_data && thumb_size > 0) {
+        cJSON *url_req = cJSON_CreateObject();
+        cJSON_AddStringToObject(url_req, "deviceId", DEVICE_ID);
+        cJSON_AddStringToObject(url_req, "eventId", event_id);
+        cJSON_AddStringToObject(url_req, "mediaType", "snapshot");
+        cJSON_AddStringToObject(url_req, "contentType", "image/jpeg");
+        cJSON_AddStringToObject(url_req, "sessionId", session_id);
 
-    if (!resp) {
-        ESP_LOGE(TAG, "Failed to get upload URL for recording");
-        free(record_buf);
-        record_buf = NULL;
-        return;
-    }
+        cJSON *url_resp = api_post_json("/media/upload-url", url_req);
+        cJSON_Delete(url_req);
 
-    cJSON *url_obj = cJSON_GetObjectItem(resp, "uploadUrl");
-    cJSON *key_obj = cJSON_GetObjectItem(resp, "key");
-    const char *upload_url = url_obj ? url_obj->valuestring : NULL;
-    const char *s3_key = key_obj ? key_obj->valuestring : "unknown";
-
-    if (!upload_url) {
-        ESP_LOGE(TAG, "No uploadUrl in response");
-        cJSON_Delete(resp);
-        free(record_buf);
-        record_buf = NULL;
-        return;
-    }
-
-    /* Upload the raw recording buffer */
-    ESP_LOGI(TAG, "Uploading recording (%d bytes) to S3...", record_buf_pos);
-    int ret = upload_to_s3(upload_url, record_buf, record_buf_pos, "video/mp4");
-    cJSON_Delete(resp);
-
-    free(record_buf);
-    record_buf = NULL;
-
-    if (ret != 0) {
-        ESP_LOGE(TAG, "Recording upload failed");
-        return;
+        if (url_resp) {
+            cJSON *uo = cJSON_GetObjectItem(url_resp, "uploadUrl");
+            cJSON *ko = cJSON_GetObjectItem(url_resp, "key");
+            if (uo && cJSON_IsString(uo)) {
+                upload_to_s3(uo->valuestring, thumb_data, thumb_size, "image/jpeg");
+                if (ko && cJSON_IsString(ko)) {
+                    s3_key_thumb_copy = strdup(ko->valuestring);
+                }
+            }
+            cJSON_Delete(url_resp);
+        }
+        heap_caps_free(thumb_data);
     }
 
     /* Create event */
@@ -404,7 +419,10 @@ static void do_record_stop(void)
     cJSON_AddNumberToObject(event_req, "durationSec", duration_sec);
 
     cJSON *s3_keys = cJSON_CreateObject();
-    cJSON_AddStringToObject(s3_keys, "video", s3_key);
+    if (s3_key_thumb_copy) {
+        cJSON_AddStringToObject(s3_keys, "snapshot", s3_key_thumb_copy);
+        free((void *)s3_key_thumb_copy);
+    }
     cJSON_AddItemToObject(event_req, "s3Keys", s3_keys);
     cJSON_AddStringToObject(event_req, "uploadStatus", "complete");
 

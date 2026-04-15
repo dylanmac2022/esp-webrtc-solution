@@ -54,6 +54,8 @@ typedef struct {
 static capture_system_t capture_sys;
 static player_system_t  player_sys;
 
+static esp_capture_sink_handle_t snapshot_sink = NULL;
+
 static bool           music_playing  = false;
 static bool           music_stopping = false;
 static const uint8_t *music_to_play;
@@ -171,6 +173,26 @@ static int build_capture_system(void)
         .video_src = capture_sys.vid_src,
     };
     esp_capture_open(&cfg, &capture_sys.capture_handle);
+
+    /* Pre-create snapshot sink (index 1) with raw RGB565 output.
+     * We request RGB565 (not MJPEG) so the pipeline only does a PPA colour-space
+     * conversion and does NOT spin up a second video encoder that would conflict
+     * with the H.264 encoder already running for the WebRTC sink (index 0).
+     * The JPEG encoding is done in software via esp_jpeg_enc after we acquire
+     * a single raw frame.  Stays disabled until a snapshot is requested. */
+    esp_capture_sink_cfg_t snap_cfg = {
+        .video_info = {
+            .format_id = ESP_CAPTURE_FMT_ID_RGB565,
+            .width  = VIDEO_WIDTH,
+            .height = VIDEO_HEIGHT,
+            .fps    = 15,
+        },
+    };
+    esp_capture_sink_setup(capture_sys.capture_handle, 1, &snap_cfg, &snapshot_sink);
+    if (snapshot_sink) {
+        esp_capture_sink_disable_stream(snapshot_sink, ESP_CAPTURE_STREAM_TYPE_AUDIO);
+    }
+
     return 0;
 }
 
@@ -255,14 +277,19 @@ int media_sys_buildup(void)
 
 int media_sys_get_provider(esp_webrtc_media_provider_t *provide)
 {
-    // Step 9: Expose capture/player handles to the WebRTC stack.
-    // This is the handoff point between media_sys.c and webrtc.c.
-    // The WebRTC engine uses 'capture' to pull encoded H.264/OPUS frames
-    // for sending to the browser, and 'player' to push decoded frames
-    // received from the browser to the local speaker/LCD.
-    provide->capture = capture_sys.capture_handle; // Source: camera + mic -> browser
-    provide->player  = player_sys.player;          // Sink:   browser audio -> speaker
+    provide->capture = capture_sys.capture_handle;
+    provide->player  = player_sys.player;
     return 0;
+}
+
+esp_capture_handle_t media_sys_get_capture_handle(void)
+{
+    return capture_sys.capture_handle;
+}
+
+esp_capture_sink_handle_t media_sys_get_snapshot_sink(void)
+{
+    return snapshot_sink;
 }
 
 int test_capture_to_player(void)

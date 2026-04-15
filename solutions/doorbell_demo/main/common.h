@@ -6,6 +6,8 @@
 #include "media_sys.h"
 #include "network.h"
 #include "sys_state.h"
+#include "esp_capture.h"
+#include "esp_capture_sink.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -53,6 +55,16 @@ void query_webrtc(void);
  *      - Others  Fail to stop
  */
 int stop_webrtc(void);
+
+/**
+ * @brief  Get the capture handle
+ */
+esp_capture_handle_t media_sys_get_capture_handle(void);
+
+/**
+ * @brief  Get pre-created snapshot sink (MJPEG, index 1)
+ */
+esp_capture_sink_handle_t media_sys_get_snapshot_sink(void);
 
 #ifdef __cplusplus
 }
