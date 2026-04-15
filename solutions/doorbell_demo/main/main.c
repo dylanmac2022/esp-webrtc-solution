@@ -37,6 +37,8 @@ static const char *TAG = "Lab7_Main";
 
 /* ──────────────────── MQTT command dispatcher ──────────────────── */
 
+// Called when a command arrives over MQTT from the web UI (e.g. CAPTURE_SNAPSHOT,
+// RECORD_START, RECORD_STOP). Forwards directly to cloud_upload module for handling.
 static void on_mqtt_command(const char *command, const char *payload_json)
 {
     /* Forward all commands to the cloud upload module */
@@ -253,8 +255,9 @@ static void capture_scheduler(const char *name, esp_capture_thread_schedule_cfg_
 static int network_event_handler(bool connected)
 {
     if (connected) {
+        // Wi-Fi is up — launch all cloud services in a background thread.
         RUN_ASYNC(start, {
-            /* 1. Sync time (required for TLS cert validation) */
+            // (a) Sync system clock via SNTP so TLS certificate dates are valid.
             static bool sntp_synced = false;
             if (!sntp_synced) {
                 if (0 == webrtc_utils_time_sync_init()) {
@@ -262,7 +265,8 @@ static int network_event_handler(bool connected)
                 }
             }
 
-            /* 2. Start WHIP publish to LiveKit */
+            // (b) Start live-streaming: send H.264 video + OPUS audio to LiveKit
+            //     via the WHIP protocol. Viewers connect through the LiveKit room.
             ESP_LOGI(TAG, "Starting WHIP publish to LiveKit...");
             int ret = start_webrtc(WHIP_URL, WHIP_STREAM_KEY);
             if (ret == 0) {
@@ -271,14 +275,16 @@ static int network_event_handler(bool connected)
                 ESP_LOGE(TAG, "Failed to start WHIP publish");
             }
 
-            /* 3. Initialize cloud upload module */
+            // (c) Initialize the cloud upload module (S3 upload, snapshot/recording logic).
             cloud_upload_init();
 
-            /* 4. Start MQTT for receiving commands */
+            // (d) Connect to AWS IoT Core over MQTT (TLS + mutual auth).
+            //     Subscribes to doorbell/{device}/commands for remote control.
             ESP_LOGI(TAG, "Starting MQTT connection to AWS IoT Core...");
             mqtt_client_start(on_mqtt_command);
         });
     } else {
+        // Wi-Fi lost — tear down streaming and MQTT gracefully.
         stop_webrtc();
         mqtt_client_stop();
     }
@@ -289,14 +295,34 @@ static int network_event_handler(bool connected)
 
 void app_main(void)
 {
+    // Step 1: Set log level and register the media library OS adapter (memory, threads, etc.)
     esp_log_level_set("*", ESP_LOG_INFO);
     media_lib_add_default_adapter();
+
+    // Step 2: Register custom thread schedulers so capture and media tasks
+    //         get the right stack sizes, priorities, and core pinning.
     esp_capture_set_thread_scheduler(capture_scheduler);
     media_lib_thread_set_schedule_cb(thread_scheduler);
+
+    // Step 3: Initialize the board hardware — I2C bus, audio codec (ES8311),
+    //         camera power/clock pins, and I2S for mic + speaker.
     init_board();
+
+    // Step 4: Build the media pipeline — registers codecs (H.264, OPUS),
+    //         opens camera + mic as a synchronized capture source, and
+    //         sets up the local playback path (speaker + optional LCD).
     media_sys_buildup();
+
+    // Step 5: Start the serial console (USB/UART) with CLI commands like
+    //         snap, rec start/stop, wifi, leave, etc. for manual testing.
     init_console();
+
+    // Step 6: Connect to Wi-Fi. When connected, the callback (network_event_handler)
+    //         syncs time via SNTP, starts WHIP live-streaming to LiveKit,
+    //         initializes cloud upload, and starts MQTT for IoT commands.
     network_init(WIFI_SSID, WIFI_PASSWORD, network_event_handler);
+
+    // Main loop: periodically logs WebRTC connection stats (bitrate, packet loss).
     while (1) {
         media_lib_thread_sleep(2000);
         query_webrtc();

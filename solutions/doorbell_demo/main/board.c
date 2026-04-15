@@ -49,12 +49,21 @@ static int enable_p4_eye_camera(camera_cfg_t *cfg, bool enable)
 void init_board()
 {
     ESP_LOGI(TAG, "Init board.");
+
+    // Select the correct pin map and codec configuration for this dev board.
     set_default_codec_board();
-    // Notes when use playback and record at same time, must set reuse_dev = false
+
+    // Initialize the audio codec (ES8311): opens I2S TX (speaker) and I2S RX (mic)
+    // channels. reuse_dev=false keeps playback and recording on separate I2S slots
+    // so they can run simultaneously without bus contention.
     codec_init_cfg_t cfg = {.reuse_dev = false};
     if (strcmp(CONFIG_CODEC_BOARD, "ESP32_P4_EYE") == 0) {
+        // P4-EYE board uses a PDM microphone instead of I2S PCM.
         cfg.in_mode = CODEC_I2S_MODE_PDM;
+        // Initialize the shared I2C bus (bus 0) used by both the audio codec
+        // and the camera sensor for register-level control.
         init_i2c(0);
+        // Power on the camera sensor and start its external clock (XCLK).
         camera_cfg_t camera_cfg = {};
         get_camera_cfg(&camera_cfg);
         enable_p4_eye_camera(&camera_cfg, true);
