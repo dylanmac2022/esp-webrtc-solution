@@ -303,6 +303,50 @@ function renderEvents(events) {
   }).join('');
 }
 
+// ── MJPEG AVI Parser ──
+function parseMjpegAvi(buffer) {
+  const data = new Uint8Array(buffer);
+  const frames = [];
+  // Search for JPEG SOI (0xFFD8) and EOI (0xFFD9) markers
+  for (let i = 0; i < data.length - 1; i++) {
+    if (data[i] === 0xFF && data[i+1] === 0xD8) {
+      // Found JPEG start, look for end
+      for (let j = i + 2; j < data.length - 1; j++) {
+        if (data[j] === 0xFF && data[j+1] === 0xD9) {
+          frames.push(data.slice(i, j + 2));
+          i = j + 1;
+          break;
+        }
+      }
+    }
+  }
+  return frames;
+}
+
+let playbackTimer = null;
+
+function stopPlayback() {
+  if (playbackTimer) { clearInterval(playbackTimer); playbackTimer = null; }
+}
+
+function playMjpegFrames(frames, imgEl, fpsDisplay) {
+  stopPlayback();
+  let idx = 0;
+  const fps = 2;
+  function showFrame() {
+    if (idx >= frames.length) idx = 0;
+    const blob = new Blob([frames[idx]], {type: 'image/jpeg'});
+    const url = URL.createObjectURL(blob);
+    const old = imgEl.src;
+    imgEl.src = url;
+    if (old && old.startsWith('blob:')) URL.revokeObjectURL(old);
+    if (fpsDisplay) fpsDisplay.textContent = `Frame ${idx+1}/${frames.length}`;
+    idx++;
+  }
+  showFrame();
+  playbackTimer = setInterval(showFrame, 1000 / fps);
+}
+
 // ── Media Preview ──
 async function viewMedia(eventId, type) {
   try {
@@ -315,10 +359,29 @@ async function viewMedia(eventId, type) {
     }
 
     const content = document.getElementById('preview-content');
+    stopPlayback();
+
     if (type === 'snapshot') {
       content.innerHTML = `<img src="${url}" alt="Snapshot" />`;
     } else if (type === 'video') {
-      content.innerHTML = `<video src="${url}" controls autoplay style="max-width:90vw;max-height:85vh;border-radius:8px;"></video>`;
+      content.innerHTML = `
+        <div style="text-align:center;">
+          <img id="mjpeg-player" style="max-width:90vw;max-height:80vh;border-radius:8px;" alt="Recording" />
+          <div style="margin-top:8px;color:#ccc;">
+            <span id="frame-info">Loading...</span>
+          </div>
+        </div>`;
+      // Fetch the AVI file and parse MJPEG frames
+      log('Downloading AVI recording...');
+      const resp = await fetch(url);
+      const buf = await resp.arrayBuffer();
+      const frames = parseMjpegAvi(buf);
+      log(`Parsed ${frames.length} JPEG frames from AVI`, 'ok');
+      if (frames.length > 0) {
+        playMjpegFrames(frames, document.getElementById('mjpeg-player'), document.getElementById('frame-info'));
+      } else {
+        document.getElementById('frame-info').textContent = 'No frames found in recording';
+      }
     }
     document.getElementById('preview-modal').classList.add('open');
     log(`${type} loaded`, 'ok');
@@ -328,6 +391,7 @@ async function viewMedia(eventId, type) {
 }
 
 function closePreview() {
+  stopPlayback();
   document.getElementById('preview-modal').classList.remove('open');
   document.getElementById('preview-content').innerHTML = '';
 }
