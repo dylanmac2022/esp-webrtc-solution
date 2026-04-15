@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bird Feeder — Lab 7 Demo</title>
+<style>
+  :root { --bg: #1a1a2e; --card: #16213e; --accent: #0f3460; --text: #e0e0e0; --green: #4ecca3; --red: #e74c3c; --blue: #3498db; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  header { background: var(--accent); padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; }
+  header h1 { font-size: 1.4rem; }
+  header .status { margin-left: auto; display: flex; align-items: center; gap: .5rem; font-size: .85rem; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); }
+  .dot.live { background: var(--green); animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.4 } }
+  main { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media(max-width:800px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border-radius: 10px; padding: 1.2rem; }
+  .card h2 { font-size: 1.1rem; margin-bottom: .8rem; border-bottom: 1px solid var(--accent); padding-bottom: .5rem; }
+  #video-container { position: relative; background: #000; border-radius: 8px; overflow: hidden; aspect-ratio: 4/3; }
+  #video-container video { width: 100%; height: 100%; object-fit: contain; }
+  #video-container .overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #666; text-align: center; }
+  .controls { display: flex; gap: .8rem; flex-wrap: wrap; margin-top: 1rem; }
+  button { padding: .6rem 1.2rem; border: none; border-radius: 6px; cursor: pointer; font-size: .9rem; font-weight: 500; transition: .2s; }
+  button:hover { filter: brightness(1.15); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-primary { background: var(--blue); color: #fff; }
+  .btn-success { background: var(--green); color: #000; }
+  .btn-danger { background: var(--red); color: #fff; }
+  .btn-outline { background: transparent; border: 1px solid var(--text); color: var(--text); }
+  .events-list { max-height: 400px; overflow-y: auto; }
+  .event-item { display: flex; align-items: center; gap: .8rem; padding: .6rem; border-radius: 6px; margin-bottom: .5rem; background: rgba(255,255,255,.03); cursor: pointer; transition: .2s; }
+  .event-item:hover { background: rgba(255,255,255,.08); }
+  .event-icon { font-size: 1.5rem; }
+  .event-info { flex: 1; }
+  .event-info .type { font-weight: 500; text-transform: capitalize; }
+  .event-info .time { font-size: .75rem; color: #888; }
+  .event-actions { display: flex; gap: .4rem; }
+  .event-actions button { padding: .3rem .6rem; font-size: .75rem; }
+  #preview-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 100; justify-content: center; align-items: center; }
+  #preview-modal.open { display: flex; }
+  #preview-modal .modal-content { max-width: 90vw; max-height: 90vh; position: relative; }
+  #preview-modal img, #preview-modal video { max-width: 90vw; max-height: 85vh; border-radius: 8px; }
+  #preview-modal .close-btn { position: absolute; top: -10px; right: -10px; background: var(--red); color: #fff; border: none; width: 30px; height: 30px; border-radius: 50%; cursor: pointer; font-size: 1.2rem; }
+  .log { font-family: monospace; font-size: .75rem; background: #0d0d1a; border-radius: 6px; padding: .8rem; max-height: 180px; overflow-y: auto; margin-top: .8rem; }
+  .log .entry { margin-bottom: .2rem; }
+  .log .entry.error { color: var(--red); }
+  .log .entry.ok { color: var(--green); }
+  #config-section input { width: 100%; padding: .5rem; margin-bottom: .5rem; border-radius: 4px; border: 1px solid #333; background: #0d0d1a; color: var(--text); font-size: .85rem; }
+  #config-section label { font-size: .8rem; display: block; margin-bottom: .2rem; color: #888; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>&#x1F426; Bird Feeder — Lab 7</h1>
+  <div class="status">
+    <div class="dot" id="status-dot"></div>
+    <span id="status-text">Disconnected</span>
+  </div>
+</header>
+
+<main>
+<div id="config-section" class="card" style="margin-bottom:1.5rem;">
+  <h2>Configuration</h2>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:.8rem;align-items:end;">
+    <div>
+      <label>API Base URL</label>
+      <input id="cfg-api" value="https://wy3mcplope.execute-api.us-east-2.amazonaws.com" />
+    </div>
+    <div>
+      <label>Device API Key</label>
+      <input id="cfg-key" value="doorbell-lab7-key-2026-04-02-9f7c" />
+    </div>
+    <div>
+      <label>Device ID</label>
+      <input id="cfg-device" value="esp32p4-birdfeeder" />
+    </div>
+    <div>
+      <button class="btn-primary" onclick="connectLive()">Connect</button>
+    </div>
+  </div>
+</div>
+
+<div class="grid">
+  <!-- Live View -->
+  <div class="card">
+    <h2>Live View</h2>
+    <div id="video-container">
+      <div class="overlay" id="video-overlay">Click "Connect" to start</div>
+      <video id="live-video" autoplay playsinline muted></video>
+    </div>
+    <div class="controls">
+      <button class="btn-success" id="btn-snap" onclick="sendCommand('capture_snapshot')" disabled>&#x1F4F7; Snapshot</button>
+      <button class="btn-danger" id="btn-rec" onclick="toggleRecording()" disabled>&#x23FA; Start Recording</button>
+      <button class="btn-outline" onclick="refreshEvents()">&#x1F504; Refresh Events</button>
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+
+  <!-- Events Gallery -->
+  <div class="card">
+    <h2>Events Gallery</h2>
+    <div class="events-list" id="events-list">
+      <p style="color:#666;text-align:center;padding:2rem;">No events yet. Connect and capture some!</p>
+    </div>
+  </div>
+</div>
+</main>
+
+<!-- Preview Modal -->
+<div id="preview-modal" onclick="closePreview()">
+  <div class="modal-content" onclick="event.stopPropagation()">
+    <button class="close-btn" onclick="closePreview()">&times;</button>
+    <div id="preview-content"></div>
+  </div>
+</div>
+
+<!-- LiveKit JS SDK -->
+<script src="https://unpkg.com/livekit-client@2/dist/livekit-client.umd.js"></script>
+<script>
+// ── Config ──
+function cfg(id) { return document.getElementById(id).value.trim(); }
+function apiUrl() { return cfg('cfg-api'); }
+function apiKey() { return cfg('cfg-key'); }
+function deviceId() { return cfg('cfg-device'); }
+
+// ── Logging ──
+const logEl = document.getElementById('log');
+function log(msg, cls='') {
+  const d = document.createElement('div');
+  d.className = 'entry ' + cls;
+  d.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ── API Helper ──
+async function api(method, path, body) {
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey() },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const resp = await fetch(apiUrl() + path, opts);
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`API ${resp.status}: ${err}`);
+  }
+  return resp.json();
+}
+
+// ── LiveKit Connection ──
+let room = null;
+let recording = false;
+
+async function connectLive() {
+  try {
+    log('Requesting LiveKit viewer token...');
+    const data = await api('POST', '/token/livekit', {
+      deviceId: deviceId(),
+      roomName: 'birdfeeder',
+      role: 'viewer',
+    });
+
+    log(`Token received. Room: ${data.roomName}`, 'ok');
+
+    if (room) { room.disconnect(); room = null; }
+
+    room = new LivekitClient.Room({
+      adaptiveStream: true,
+      dynacast: true,
+    });
+
+    room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, pub, participant) => {
+      log(`Track subscribed: ${track.kind} from ${participant.identity}`, 'ok');
+      if (track.kind === 'video') {
+        const el = track.attach();
+        el.style.width = '100%';
+        el.style.height = '100%';
+        el.style.objectFit = 'contain';
+        const container = document.getElementById('video-container');
+        // Remove old video elements
+        container.querySelectorAll('video').forEach(v => { if (v.id !== 'live-video') v.remove(); });
+        document.getElementById('live-video').style.display = 'none';
+        container.appendChild(el);
+        document.getElementById('video-overlay').style.display = 'none';
+      }
+      if (track.kind === 'audio') {
+        const el = track.attach();
+        el.style.display = 'none';
+        document.body.appendChild(el);
+      }
+    });
+
+    room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
+      track.detach().forEach(el => el.remove());
+    });
+
+    room.on(LivekitClient.RoomEvent.Disconnected, () => {
+      log('Disconnected from room', 'error');
+      setStatus(false);
+    });
+
+    room.on(LivekitClient.RoomEvent.ParticipantConnected, (p) => {
+      log(`Participant joined: ${p.identity}`);
+    });
+
+    room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (p) => {
+      log(`Participant left: ${p.identity}`);
+    });
+
+    await room.connect(data.wsUrl, data.token);
+    log(`Connected to LiveKit room "${data.roomName}"`, 'ok');
+    setStatus(true);
+
+    document.getElementById('btn-snap').disabled = false;
+    document.getElementById('btn-rec').disabled = false;
+
+    refreshEvents();
+  } catch (e) {
+    log(`Connection error: ${e.message}`, 'error');
+    console.error(e);
+  }
+}
+
+function setStatus(live) {
+  document.getElementById('status-dot').className = 'dot' + (live ? ' live' : '');
+  document.getElementById('status-text').textContent = live ? 'Live' : 'Disconnected';
+}
+
+// ── Commands ──
+async function sendCommand(cmd, payload) {
+  try {
+    log(`Sending command: ${cmd}`);
+    const resp = await api('POST', '/device/command', {
+      deviceId: deviceId(),
+      command: cmd,
+      payload: payload || {},
+    });
+    log(`Command sent: ${cmd}`, 'ok');
+    // Auto-refresh events after a short delay
+    setTimeout(refreshEvents, 3000);
+  } catch (e) {
+    log(`Command failed: ${e.message}`, 'error');
+  }
+}
+
+function toggleRecording() {
+  const btn = document.getElementById('btn-rec');
+  if (!recording) {
+    sendCommand('record_start');
+    recording = true;
+    btn.textContent = '\u23F9 Stop Recording';
+    btn.className = 'btn-danger';
+  } else {
+    sendCommand('record_stop');
+    recording = false;
+    btn.textContent = '\u23FA Start Recording';
+    btn.className = 'btn-danger';
+    setTimeout(refreshEvents, 5000); // recordings take longer to upload
+  }
+}
+
+// ── Events ──
+async function refreshEvents() {
+  try {
+    const now = Date.now();
+    const from = now - 24 * 60 * 60 * 1000; // last 24 hours
+    const data = await api('GET', `/events?deviceId=${encodeURIComponent(deviceId())}&from=${from}&to=${now}&limit=50`);
+    renderEvents(data.events || []);
+    log(`Loaded ${(data.events || []).length} events`, 'ok');
+  } catch (e) {
+    log(`Failed to load events: ${e.message}`, 'error');
+  }
+}
+
+function renderEvents(events) {
+  const el = document.getElementById('events-list');
+  if (!events.length) {
+    el.innerHTML = '<p style="color:#666;text-align:center;padding:2rem;">No events yet.</p>';
+    return;
+  }
+  el.innerHTML = events.map(ev => {
+    const icon = ev.eventType === 'snapshot' ? '\uD83D\uDCF7' : ev.eventType === 'recording' ? '\uD83C\uDFA5' : '\uD83D\uDD14';
+    const time = new Date(typeof ev.eventTs === 'number' ? ev.eventTs : ev.eventTs).toLocaleString();
+    const hasSnap = ev.s3Keys && ev.s3Keys.snapshot;
+    const hasVideo = ev.s3Keys && ev.s3Keys.video;
+    return `
+      <div class="event-item">
+        <div class="event-icon">${icon}</div>
+        <div class="event-info">
+          <div class="type">${ev.eventType}</div>
+          <div class="time">${time}</div>
+        </div>
+        <div class="event-actions">
+          ${hasSnap ? `<button class="btn-primary" onclick="viewMedia('${ev.eventId}','snapshot')">View</button>` : ''}
+          ${hasVideo ? `<button class="btn-success" onclick="viewMedia('${ev.eventId}','video')">Play</button>` : ''}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ── Media Preview ──
+async function viewMedia(eventId, type) {
+  try {
+    log(`Loading ${type} for event ${eventId.slice(0,8)}...`);
+    const data = await api('GET', `/events/${encodeURIComponent(eventId)}/playback?deviceId=${encodeURIComponent(deviceId())}`);
+    const url = data.links && data.links[type];
+    if (!url) {
+      log(`No ${type} URL found`, 'error');
+      return;
+    }
+
+    const content = document.getElementById('preview-content');
+    if (type === 'snapshot') {
+      content.innerHTML = `<img src="${url}" alt="Snapshot" />`;
+    } else if (type === 'video') {
+      content.innerHTML = `<video src="${url}" controls autoplay style="max-width:90vw;max-height:85vh;border-radius:8px;"></video>`;
+    }
+    document.getElementById('preview-modal').classList.add('open');
+    log(`${type} loaded`, 'ok');
+  } catch (e) {
+    log(`Failed to load ${type}: ${e.message}`, 'error');
+  }
+}
+
+function closePreview() {
+  document.getElementById('preview-modal').classList.remove('open');
+  document.getElementById('preview-content').innerHTML = '';
+}
+
+// ── Keyboard shortcut ──
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closePreview();
+});
+</script>
+</body>
+</html>

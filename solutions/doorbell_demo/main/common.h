@@ -1,11 +1,4 @@
-/* Door Bell Demo
-
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
+/* Lab 7 — Cloud-enabled bird feeder demo */
 
 #pragma once
 
@@ -24,15 +17,16 @@ extern "C" {
 void init_board(void);
 
 /**
- * @brief  Start WebRTC
+ * @brief  Start WebRTC via WHIP
  *
- * @param[in]  url  Signaling URL
+ * @param[in]  url    WHIP ingress URL
+ * @param[in]  token  Bearer token (stream key), or NULL
  *
  * @return
  *      - 0       On success
  *      - Others  Fail to start
  */
-int start_webrtc(char *url);
+int start_webrtc(char *url, char *token);
 
 /**
  * @brief  Set stream bitrate for WebRTC
@@ -59,11 +53,6 @@ void query_webrtc(void);
  *      - Others  Fail to stop
  */
 int stop_webrtc(void);
-
-/**
- * @brief  Send command to peer
- */
-void send_cmd(char *cmd);
 
 #ifdef __cplusplus
 }

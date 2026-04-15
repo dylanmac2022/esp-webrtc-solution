@@ -1,4 +1,4 @@
-/* General settings
+/* General settings for Lab 7 — Cloud service deployment
 
    This example code is in the Public Domain (or CC0 licensed, at your option.)
 
@@ -43,24 +43,47 @@ extern "C" {
  */
 #define DATA_CHANNEL_ENABLED (false)
 
-#if CONFIG_IDF_TARGET_ESP32P4
-/**
- * @brief  GPIO for ring button
- *
- * @note  When use ESP32P4-Fuction-Ev-Board, GPIO35(boot button) is connected RMII_TXD1
- *        When enable `NETWORK_USE_ETHERNET` will cause socket error
- *        User must replace it to a unused GPIO instead (like GPIO27)
- */
-#define DOOR_BELL_RING_BUTTON  35
-#else
-/**
- * @brief  GPIO for ring button
- *
- * @note  When use ESP32S3-KORVO-V3 Use ADC button as ring button
- */
-#define DOOR_BELL_RING_BUTTON  5
+/* ──────────────────── Lab 7: Cloud config ──────────────────── */
 
-#endif
+/**
+ * @brief  Device identity used across all cloud APIs
+ */
+#define DEVICE_ID       "esp32p4-birdfeeder"
+
+/**
+ * @brief  WHIP ingress URL from LiveKit (set after running scripts/create-ingress.js)
+ */
+#define WHIP_URL        "https://lab7cloudservice-f6kwjbnt.whip.livekit.cloud/w"
+
+/**
+ * @brief  WHIP stream key / bearer token from LiveKit ingress
+ */
+#define WHIP_STREAM_KEY "rfNUnQ79yNhL"
+
+/**
+ * @brief  API Gateway base URL (from CloudFormation output ApiBaseUrl)
+ */
+#define API_BASE_URL    "https://wy3mcplope.execute-api.us-east-2.amazonaws.com"
+
+/**
+ * @brief  Shared API key for authenticating requests to the API Gateway
+ */
+#define DEVICE_API_KEY  "doorbell-lab7-key-2026-04-02-9f7c"
+
+/**
+ * @brief  AWS IoT Core MQTT endpoint
+ */
+#define AWS_IOT_ENDPOINT "a1k8wv61s9pyz-ats.iot.us-east-2.amazonaws.com"
+
+/**
+ * @brief  MQTT topic prefix for device commands
+ */
+#define MQTT_TOPIC_PREFIX "doorbell"
+
+/**
+ * @brief  LiveKit WebSocket URL (for webpage viewer token requests)
+ */
+#define LIVEKIT_WS_URL  "wss://lab7cloudservice-f6kwjbnt.livekit.cloud"
 
 #define WEBRTC_SUPPORT_OPUS
 
