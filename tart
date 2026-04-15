@@ -1,0 +1,182 @@
+* [33mcommit 2325c682da16391aba26aa41348871fa96b8d804[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mlab7_pls_work[m[33m, [m[1;31morigin/lab7_pls_work[m[33m)[m
+[31m|[m Author: Dylan_Mac <Dylan.MacLeod@unh.edu>
+[31m|[m Date:   Wed Apr 15 16:29:58 2026 -0400
+[31m|[m 
+[31m|[m     commented code
+[31m|[m 
+* [33mcommit 80e22fa1ed3dbae12e9abcdb4a86ce550444623c[m
+[31m|[m Author: Dylan_Mac <Dylan.MacLeod@unh.edu>
+[31m|[m Date:   Wed Apr 15 16:21:22 2026 -0400
+[31m|[m 
+[31m|[m     everything works
+[31m|[m 
+* [33mcommit 0416514fe69671b041c84ca3b1f434351eaf1fcc[m
+[31m|[m Author: Dylan_Mac <Dylan.MacLeod@unh.edu>
+[31m|[m Date:   Wed Apr 15 16:02:40 2026 -0400
+[31m|[m 
+[31m|[m     Vidoe storage aws works project is done
+[31m|[m 
+* [33mcommit 3d79438ea619cb728212862ce5414bc955ca757a[m
+[31m|[m Author: Dylan_Mac <Dylan.MacLeod@unh.edu>
+[31m|[m Date:   Wed Apr 15 15:56:15 2026 -0400
+[31m|[m 
+[31m|[m     video works
+[31m|[m 
+* [33mcommit 9888fa1e3ad3d344dd2cff8a6840453ab3ba39b9[m
+[31m|[m Author: Dylan_Mac <Dylan.MacLeod@unh.edu>
+[31m|[m Date:   Wed Apr 15 15:46:06 2026 -0400
+[31m|[m 
+[31m|[m     snapshot works and uploads to aws
+[31m|[m 
+* [33mcommit bd969f2f9d420ec8efe55d924f5926df72e8391d[m
+[31m|[m Author: Dylan_Mac <Dylan.MacLeod@unh.edu>
+[31m|[m Date:   Tue Apr 14 23:16:48 2026 -0400
+[31m|[m 
+[31m|[m     snapshot and recordings work
+[31m|[m 
+* [33mcommit 67252044476d2ece41b99939235ef6b17662fb1a[m
+[31m|[m Author: Dylan_Mac <Dylan.MacLeod@unh.edu>
+[31m|[m Date:   Tue Apr 14 22:18:53 2026 -0400
+[31m|[m 
+[31m|[m     Video and audo streaming works on the website
+[31m|[m 
+* [33mcommit 51ceb0182d5b2e324c0a4987be9393b24ab1b141[m
+[31m|[m Author: Dylan_Mac <Dylan.MacLeod@unh.edu>
+[31m|[m Date:   Tue Apr 14 20:53:54 2026 -0400
+[31m|[m 
+[31m|[m     lab7 plan
+[31m|[m 
+* [33mcommit 4414d2649a5df58a15d9a66acef93572d0dd94f0[m[33m ([m[1;31morigin/Dylans_code_lab6[m[33m, [m[1;32mDylans_code_lab6[m[33m)[m
+[31m|[m Author: Dylan_Mac <Dylan.MacLeod@unh.edu>
+[31m|[m Date:   Tue Mar 31 15:07:02 2026 -0400
+[31m|[m 
+[31m|[m     commented code
+[31m|[m 
+* [33mcommit cffb055ea4c899d088c2e1f79ce315420d8bb7fc[m
+[31m|[m Author: Dylan_Mac <Dylan.MacLeod@unh.edu>
+[31m|[m Date:   Sun Mar 29 12:53:00 2026 -0400
+[31m|[m 
+[31m|[m     implimenting comments
+[31m|[m 
+* [33mcommit b72e6290a3b07b7b9a1099df43dc308c6cc204a1[m
+[31m|[m Author: Dylan_Mac <Dylan.MacLeod@unh.edu>
+[31m|[m Date:   Sat Mar 28 15:16:16 2026 -0400
+[31m|[m 
+[31m|[m     code workss
+[31m|[m 
+* [33mcommit 08f0a3b6e2dd79b5bcb9f05d9f9ac683480eacd4[m
+[31m|[m Author: Dylan_Mac <Dylan.MacLeod@unh.edu>
+[31m|[m Date:   Sat Mar 28 14:13:22 2026 -0400
+[31m|[m 
+[31m|[m     changes wifi stuff
+[31m|[m 
+* [33mcommit 753af5a8d72bf2ad9513c72eca9fbbe4385262b9[m
+[31m|[m Author: Dylan_Mac <Dylan.MacLeod@unh.edu>
+[31m|[m Date:   Sat Mar 28 13:42:24 2026 -0400
+[31m|[m 
+[31m|[m     made a plan and edit wifi param
+[31m|[m   
+*   [33mcommit 6c411b05540d380694545b4b76630c29317925f0[m[33m ([m[1;31mupstream/main[m[33m, [m[1;31mupstream/HEAD[m[33m, [m[1;32mmain[m[33m)[m
+[32m|[m[33m\[m  Merge: 2bce717 2204bc4
+[32m|[m [33m|[m Author: Tian Hai Bo <tianhaibo@espressif.com>
+[32m|[m [33m|[m Date:   Tue Mar 24 09:56:01 2026 +0800
+[32m|[m [33m|[m 
+[32m|[m [33m|[m     Merge branch 'feature/add_esp_peer_v1.3.4' into 'main'
+[32m|[m [33m|[m     
+[32m|[m [33m|[m     esp_peer: Add v1.3.4
+[32m|[m [33m|[m     
+[32m|[m [33m|[m     See merge request adf/esp-webrtc-solution!78
+[32m|[m [33m|[m 
+[32m|[m * [33mcommit 2204bc416c7d1bfbb181e34dc3811d95b5f0dc4c[m
+[32m|[m[32m/[m  Author: tempo <tianhaibo@espressif.com>
+[32m|[m   Date:   Fri Mar 20 20:18:54 2026 +0800
+[32m|[m   
+[32m|[m       esp_peer: Add v1.3.4
+[32m|[m       
+[32m|[m       - Added `alive_binding_retries` to configuration binding maximum retries before disconnected
+[32m|[m       - Fixed connectivity check fail if remote candidate not acceptable (TCP etc)
+[32m|[m       - Fixed peer binding response discard if RTT over 400ms
+[32m|[m   
+*   [33mcommit 2bce7178cc596a4104745722c49c56bccd5df7b4[m
+[34m|[m[35m\[m  Merge: 57c5810 27dc56e
+[34m|[m [35m|[m Author: Tian Hai Bo <tianhaibo@espressif.com>
+[34m|[m [35m|[m Date:   Wed Mar 11 16:16:10 2026 +0800
+[34m|[m [35m|[m 
+[34m|[m [35m|[m     Merge branch 'feature/add_webrtc_usb_uvc_demo' into 'main'
+[34m|[m [35m|[m     
+[34m|[m [35m|[m     Add webrtc usb camera bridge demo
+[34m|[m [35m|[m     
+[34m|[m [35m|[m     See merge request adf/esp-webrtc-solution!77
+[34m|[m [35m|[m 
+[34m|[m * [33mcommit 27dc56ee320d8fadc276548f7a61d5da89bb736a[m
+[34m|[m [35m|[m Author: tempo <tianhaibo@espressif.com>
+[34m|[m [35m|[m Date:   Wed Mar 11 14:56:07 2026 +0800
+[34m|[m [35m|[m 
+[34m|[m [35m|[m     Webrtc camera refine code
+[34m|[m [35m|[m 
+[34m|[m * [33mcommit bb827d2f1fbdc90c644397c69ff877cac8436432[m
+[34m|[m[34m/[m  Author: tempo <tianhaibo@espressif.com>
+[34m|[m   Date:   Wed Mar 11 14:38:45 2026 +0800
+[34m|[m   
+[34m|[m       Add webrtc UVC camera example
+[34m|[m   
+*   [33mcommit 57c5810791bc089820dfc95ca7d3238ba80eed94[m
+[36m|[m[1;31m\[m  Merge: 80cb08c f521c11
+[36m|[m [1;31m|[m Author: Tian Hai Bo <tianhaibo@espressif.com>
+[36m|[m [1;31m|[m Date:   Tue Mar 10 16:12:26 2026 +0800
+[36m|[m [1;31m|[m 
+[36m|[m [1;31m|[m     Merge branch 'feature/add_esp_peer_v1.3.2' into 'main'
+[36m|[m [1;31m|[m     
+[36m|[m [1;31m|[m     esp_peer: Add version v1.3.2
+[36m|[m [1;31m|[m     
+[36m|[m [1;31m|[m     See merge request adf/esp-webrtc-solution!76
+[36m|[m [1;31m|[m 
+[36m|[m * [33mcommit f521c11224ebe6c026d3445f7afcd219c08e0e8c[m
+[36m|[m[36m/[m  Author: tempo <tianhaibo@espressif.com>
+[36m|[m   Date:   Tue Mar 10 15:25:38 2026 +0800
+[36m|[m   
+[36m|[m       esp_peer: Add version v1.3.2
+[36m|[m       
+[36m|[m       - Added update permission for ICE
+[36m|[m       - Added ICE lite support
+[36m|[m       - Update whip demo to use ICE lite in default
+[36m|[m       
+[36m|[m       Closes https://github.com/espressif/esp-webrtc-solution/issues/157
+[36m|[m       Closes https://github.com/espressif/esp-webrtc-solution/issues/159
+[36m|[m   
+*   [33mcommit 80cb08c963dc6934d118dd61cf91a101737841dc[m
+[1;32m|[m[1;33m\[m  Merge: e7843b9 440296d
+[1;32m|[m [1;33m|[m Author: Tian Hai Bo <tianhaibo@espressif.com>
+[1;32m|[m [1;33m|[m Date:   Mon Mar 2 14:24:44 2026 +0800
+[1;32m|[m [1;33m|[m 
+[1;32m|[m [1;33m|[m     Merge branch 'feature/add_rtsp_server_test' into 'main'
+[1;32m|[m [1;33m|[m     
+[1;32m|[m [1;33m|[m     Add RTSP server test code
+[1;32m|[m [1;33m|[m     
+[1;32m|[m [1;33m|[m     See merge request adf/esp-webrtc-solution!75
+[1;32m|[m [1;33m|[m 
+[1;32m|[m * [33mcommit 440296d8454a74582af6a84ade1af60f4c1f0503[m
+[1;32m|[m[1;32m/[m  Author: tempo <tianhaibo@espressif.com>
+[1;32m|[m   Date:   Fri Feb 27 21:24:49 2026 +0800
+[1;32m|[m   
+[1;32m|[m       Add RTSP Demo code
+[1;32m|[m   
+*   [33mcommit e7843b9871ab51497ceb200c49f808bc559c5813[m
+[1;34m|[m[1;35m\[m  Merge: 0787d66 0b80fb6
+[1;34m|[m [1;35m|[m Author: Tian Hai Bo <tianhaibo@espressif.com>
+[1;34m|[m [1;35m|[m Date:   Fri Feb 27 19:22:30 2026 +0800
+[1;34m|[m [1;35m|[m 
+[1;34m|[m [1;35m|[m     Merge branch 'bugfix/fix_turn_server_fail_conect' into 'main'
+[1;34m|[m [1;35m|[m     
+[1;34m|[m [1;35m|[m     Fixed turn server fail to connect when user name long
+[1;34m|[m [1;35m|[m     
+[1;34m|[m [1;35m|[m     See merge request adf/esp-webrtc-solution!74
+[1;34m|[m [1;35m|[m 
+[1;34m|[m * [33mcommit 0b80fb6b6bced5ef46a6c587806beccb1d6c5724[m
+[1;34m|[m[1;34m/[m  Author: tempo <tianhaibo@espressif.com>
+[1;34m|[m   Date:   Fri Feb 27 18:28:18 2026 +0800
+[1;34m|[m   
+[1;34m|[m       Fixed turn server fail to connect when user name long
+[1;34m|[m       
+[1;34m|[m       Closes https://github.com/espressif/esp-webrtc-solution/issues/155
+[1;34m|[m       Closes
