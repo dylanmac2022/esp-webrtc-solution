@@ -63,7 +63,7 @@ extern "C" {
 /**
  * @brief  API Gateway base URL (from CloudFormation output ApiBaseUrl)
  */
-#define API_BASE_URL    "https://wy3mcplope.execute-api.us-east-2.amazonaws.com"
+#define API_BASE_URL    "https://nex0zvlly4.execute-api.us-east-2.amazonaws.com"
 
 /**
  * @brief  Shared API key for authenticating requests to the API Gateway
@@ -73,7 +73,7 @@ extern "C" {
 /**
  * @brief  AWS IoT Core MQTT endpoint
  */
-#define AWS_IOT_ENDPOINT "a1k8wv61s9pyz-ats.iot.us-east-2.amazonaws.com"
+#define AWS_IOT_ENDPOINT "a197iljqkoehs2-ats.iot.us-east-2.amazonaws.com"
 
 /**
  * @brief  MQTT topic prefix for device commands

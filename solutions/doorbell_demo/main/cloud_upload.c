@@ -8,6 +8,7 @@
  */
 
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <time.h>
 #include <sys/time.h>
@@ -150,30 +151,38 @@ static int upload_to_s3(const char *upload_url, const uint8_t *data, int size, c
 {
     ESP_LOGI(TAG, "Uploading %d bytes to S3...", size);
 
-    esp_http_client_config_t config = {
-        .url = upload_url,
-        .method = HTTP_METHOD_PUT,
-        .timeout_ms = 30000,
-        .buffer_size = 4096,
-        .buffer_size_tx = 4096,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-    };
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) {
+            ESP_LOGW(TAG, "S3 upload retry %d/3...", attempt + 1);
+            media_lib_thread_sleep(2000);
+        }
 
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    esp_http_client_set_header(client, "Content-Type", content_type);
-    esp_http_client_set_post_field(client, (const char *)data, size);
+        esp_http_client_config_t config = {
+            .url = upload_url,
+            .method = HTTP_METHOD_PUT,
+            .timeout_ms = 30000,
+            .buffer_size = 4096,
+            .buffer_size_tx = 4096,
+            .crt_bundle_attach = esp_crt_bundle_attach,
+        };
 
-    esp_err_t err = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        esp_http_client_set_header(client, "Content-Type", content_type);
+        esp_http_client_set_post_field(client, (const char *)data, size);
 
-    if (err != ESP_OK || status < 200 || status >= 300) {
-        ESP_LOGE(TAG, "S3 upload failed: err=%s status=%d", esp_err_to_name(err), status);
-        return -1;
+        esp_err_t err = esp_http_client_perform(client);
+        int status = esp_http_client_get_status_code(client);
+        esp_http_client_cleanup(client);
+
+        if (err == ESP_OK && status >= 200 && status < 300) {
+            ESP_LOGI(TAG, "S3 upload complete (status=%d)", status);
+            return 0;
+        }
+        ESP_LOGE(TAG, "S3 upload attempt %d failed: err=%s status=%d", attempt + 1, esp_err_to_name(err), status);
     }
 
-    ESP_LOGI(TAG, "S3 upload complete (status=%d)", status);
-    return 0;
+    ESP_LOGE(TAG, "S3 upload failed after 3 attempts");
+    return -1;
 }
 
 /* ──────────────────── Capture helpers ──────────────────── */
@@ -448,11 +457,11 @@ static void cloud_cmd_task(void *arg)
 {
     cmd_task_arg_t *cmd = (cmd_task_arg_t *)arg;
 
-    if (strcmp(cmd->command, "capture_snapshot") == 0) {
+    if (strcasecmp(cmd->command, "capture_snapshot") == 0) {
         do_capture_snapshot();
-    } else if (strcmp(cmd->command, "record_start") == 0) {
+    } else if (strcasecmp(cmd->command, "record_start") == 0) {
         do_record_start();
-    } else if (strcmp(cmd->command, "record_stop") == 0) {
+    } else if (strcasecmp(cmd->command, "record_stop") == 0) {
         do_record_stop();
     } else {
         ESP_LOGW(TAG, "Unknown command: %s", cmd->command);
