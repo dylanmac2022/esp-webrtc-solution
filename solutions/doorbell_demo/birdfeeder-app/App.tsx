@@ -1,3 +1,10 @@
+/**
+ * App.tsx — Root component of the bird feeder smartphone app.
+ *
+ * Initializes the LiveKit WebRTC SDK (registerGlobals) before rendering
+ * the tab navigator. Uses dynamic import + try-catch because LiveKit
+ * requires native modules that must be loaded after the Expo runtime.
+ */
 import React, { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';

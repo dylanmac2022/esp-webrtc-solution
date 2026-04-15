@@ -1,3 +1,12 @@
+/**
+ * VideosScreen.tsx — Browse and play back MJPEG videos recorded by the ESP32-P4.
+ *
+ * Lab Feature: "Play back the recorded videos on a smartphone"
+ *   - Queries DynamoDB for recording events, lists them with timestamps
+ *   - Downloads the MJPEG AVI file from S3 (pre-signed URL)
+ *   - Parses the AVI to extract individual JPEG frames (mjpegParser.ts)
+ *   - Plays frames back at ~2 FPS using setInterval + base64 Image rendering
+ */
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
@@ -66,15 +75,15 @@ export default function VideosScreen() {
   // Playback timer
   useEffect(() => {
     if (playing && playbackFrames.length > 0) {
+      // Frame-by-frame playback: cycles through extracted JPEG frames at 2 FPS
       timerRef.current = setInterval(() => {
         setCurrentFrame((prev) => {
           if (prev >= playbackFrames.length - 1) {
-            // Loop back to start
-            return 0;
+            return 0; // loop
           }
           return prev + 1;
         });
-      }, 500); // 2 FPS
+      }, 500); // 500ms = 2 FPS
     } else {
       if (timerRef.current) {
         clearInterval(timerRef.current);
@@ -89,6 +98,7 @@ export default function VideosScreen() {
     };
   }, [playing, playbackFrames]);
 
+  // Downloads AVI from S3, parses JPEG frames, and prepares for playback
   const openPlayback = async (eventId: string) => {
     try {
       setDownloading(true);

@@ -1,3 +1,13 @@
+/**
+ * config.ts — Stores the cloud backend configuration.
+ *
+ * Default values point to the Lab 7 AWS deployment:
+ *   - apiUrl:    API Gateway endpoint (routes REST calls to Lambda)
+ *   - apiKey:    Shared key for authenticating API requests
+ *   - deviceId:  ESP32-P4 device identifier used in MQTT topics
+ *
+ * Settings are persisted to AsyncStorage so they survive app restarts.
+ */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export interface AppConfig {

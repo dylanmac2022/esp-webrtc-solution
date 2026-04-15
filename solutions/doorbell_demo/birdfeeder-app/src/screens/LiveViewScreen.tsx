@@ -1,3 +1,13 @@
+/**
+ * LiveViewScreen.tsx — Main screen for the bird feeder app.
+ *
+ * Implements three key lab features:
+ *   1. LIVE VIDEO STREAMING — Connects to LiveKit Cloud via WebRTC to view the
+ *      ESP32-P4 camera feed in real time.
+ *   2. MQTT COMMANDS — Sends capture_snapshot, record_start, record_stop commands
+ *      through the cloud API, which forwards them via AWS IoT Core MQTT.
+ *   3. ACTIVITY LOG — Shows a timestamped log of all actions taken.
+ */
 import React, { useState } from 'react';
 import {
   View,
@@ -18,7 +28,11 @@ import { sendCommand, getViewerToken } from '../services/api';
 
 type ConnectionStatus = 'disconnected' | 'connecting' | 'live';
 
-/** Inner component that renders remote video tracks inside LiveKitRoom context */
+/**
+ * RemoteVideo — Subscribes to the ESP32-P4's camera track via LiveKit.
+ * Uses the useTracks() hook to get the remote camera stream, then renders
+ * it with <VideoTrack>. This is the core of the live video feature.
+ */
 function RemoteVideo() {
   const videoTracks = useTracks([Track.Source.Camera], {
     onlySubscribed: true,
@@ -59,6 +73,12 @@ export default function LiveViewScreen() {
     setLogs((prev) => [`[${ts}] ${msg}`, ...prev].slice(0, 50));
   };
 
+  /**
+   * FEATURE: Live Video Connection
+   * 1. Requests a viewer JWT token from the cloud API
+   * 2. Uses the token + WebSocket URL to join the LiveKit room
+   * 3. The <LiveKitRoom> component handles the WebRTC connection
+   */
   const handleConnect = async () => {
     if (status === 'live') {
       setStatus('disconnected');
@@ -83,6 +103,12 @@ export default function LiveViewScreen() {
     }
   };
 
+  /**
+   * FEATURE: MQTT Device Control
+   * Sends a command string to the ESP32-P4 via the REST API.
+   * The API Gateway Lambda publishes it to the MQTT topic
+   * doorbell/esp32p4-birdfeeder/commands
+   */
   const handleCommand = async (command: string) => {
     try {
       setSending(command);
@@ -97,8 +123,10 @@ export default function LiveViewScreen() {
     }
   };
 
+  // capture_snapshot: tells ESP32-P4 to take a JPEG photo and upload to S3
   const handleSnapshot = () => handleCommand('capture_snapshot');
 
+  // record_start / record_stop: tells ESP32-P4 to begin/end MJPEG recording
   const handleToggleRecording = async () => {
     if (!recording) {
       await handleCommand('record_start');
@@ -122,7 +150,7 @@ export default function LiveViewScreen() {
         </Text>
       </View>
 
-      {/* Video Area */}
+      {/* LiveKit WebRTC room — connects to the ESP32-P4's published stream */}
       {status === 'live' && token && wsUrl ? (
         <LiveKitRoom
           serverUrl={wsUrl}

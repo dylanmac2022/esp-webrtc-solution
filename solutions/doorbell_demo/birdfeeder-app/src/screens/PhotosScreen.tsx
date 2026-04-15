@@ -1,3 +1,11 @@
+/**
+ * PhotosScreen.tsx — Browse and preview photos captured by the ESP32-P4.
+ *
+ * Lab Feature: "Preview the captured photos on a smartphone"
+ *   - Queries DynamoDB (via listEvents API) for snapshot events from the last 7 days
+ *   - Displays them in a 3-column grid
+ *   - Tapping a photo fetches a pre-signed S3 URL and opens a full-screen preview
+ */
 import React, { useState, useCallback } from 'react';
 import {
   View,
@@ -27,6 +35,7 @@ export default function PhotosScreen() {
 
   const fetchPhotos = useCallback(async () => {
     try {
+      // Fetch events from DynamoDB and filter for snapshots only
       const now = Date.now();
       const from = now - 7 * 24 * 60 * 60 * 1000; // last 7 days
       const events = await listEvents(from, now, 50);
@@ -52,6 +61,7 @@ export default function PhotosScreen() {
     fetchPhotos();
   };
 
+  // Gets a time-limited pre-signed S3 URL for the selected photo
   const openPreview = async (eventId: string) => {
     try {
       setPreviewLoading(true);
